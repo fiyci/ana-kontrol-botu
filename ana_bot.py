@@ -392,18 +392,22 @@ async def cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # CASİNO
     elif d == "m_casino":
         await q.edit_message_text(
-            f"🎰 <b>Casino Modülü</b>\n\nDurum: {'🟢' if c['casino_aktif'] else '🔴'}\n"
-            f"Min bahis: {c['casino_min_bahis']} puan\nMax bahis: {c['casino_max_bahis']} puan\n\n"
-            f"<b>Kullanıcı komutları:</b>\n"
-            f"/zar [bahis] — Zar at\n/tura [bahis] — Yazı tura\n"
-            f"/rulet [bahis] — Rulet\n/slot [bahis] — Slot makinesi\n/jackpot — Büyük ikramiye",
+            f"🎰 <b>Casino Modülü</b>\n\n"
+            f"Durum: {'🟢 Aktif' if c['casino_aktif'] else '🔴 Pasif'}\n"
+            f"Min bahis: <b>{c['casino_min_bahis']} puan</b>\n"
+            f"Max bahis: <b>{c['casino_max_bahis']} puan</b>\n\n"
+            f"<b>🎮 18 Oyun:</b>\n"
+            f"🎲 /zar  🪙 /tura  🎰 /slot  🎡 /rulet\n"
+            f"💣 /mines  🎣 /balik  🔢 /tahmin  🃏 /kart\n"
+            f"📊 /ya  🎱 /tombala  ⚔️ /savas  🎁 /hediye\n"
+            f"🎳 /bowling  🎯 /dart  🏀 /basketbol  ⚽ /penalti",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔴 Kapat" if c["casino_aktif"] else "🟢 Aç", callback_data="casino_toggle")],
                 [InlineKeyboardButton("💰 Min Bahis", callback_data="casino_min"), InlineKeyboardButton("💎 Max Bahis", callback_data="casino_max")],
                 [InlineKeyboardButton("🔙 Geri", callback_data="ana")],
             ]))
-    elif d=="casino_toggle": c["casino_aktif"]=not c["casino_aktif"]; save(c); await cb(update,context)
+    elif d=="casino_toggle": c["casino_aktif"]=not c["casino_aktif"]; save(c); await cb_v2(update,context)
     elif d=="casino_min": await q.edit_message_text("Min bahis miktarı (puan):\n\nİptal: /iptal", reply_markup=geri_kb("m_casino")); context.user_data["bekle"]="casino_min"
     elif d=="casino_max": await q.edit_message_text("Max bahis miktarı (puan):\n\nİptal: /iptal", reply_markup=geri_kb("m_casino")); context.user_data["bekle"]="casino_max"
 
@@ -493,26 +497,27 @@ async def cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         txt="\n\n".join([f"🎫#{tid}\n{t.get('isim','?')}: {t.get('mesaj','?')[:80]}" for tid,t in tickets]) or "Açık ticket yok."
         await q.edit_message_text(f"📋 Açık Ticketlar:\n\n{txt}", reply_markup=geri_kb("m_ticket"))
 
-    # AYARLAR
+    # AYARLAR — YENİ YETKİ SİSTEMİ
     elif d == "m_ayar":
-        admin_txt="\n".join([f"• <code>{a}</code>" for a in c["adminler"]])
-        await q.edit_message_text(f"⚙️ <b>Marka & Admin</b>\n\nBot adı: {c.get('marka_isim')}\nAdminler:\n{admin_txt}", parse_mode="HTML",
+        SEV_EMOJI = {3: "👑", 2: "🛡", 1: "⭐"}
+        adminler_seviye = c.get("adminler_seviye", {})
+        admin_txt = "\n".join([
+            f"  {SEV_EMOJI.get(adminler_seviye.get(str(a), 3), '👑')} <code>{a}</code>"
+            for a in c["adminler"]
+        ])
+        await q.edit_message_text(
+            f"⚙️ <b>Marka & Admin</b>\n\n"
+            f"🤖 Bot adı: <b>{c.get('marka_isim','TG Suite Pro')}</b>\n\n"
+            f"👥 Adminler:\n{admin_txt}",
+            parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("✏️ Bot Adı", callback_data="marka_isim"), InlineKeyboardButton("➕ Admin Ekle", callback_data="admin_ekle")],
-                [InlineKeyboardButton("➖ Admin Sil", callback_data="admin_sil_menu")],
+                [InlineKeyboardButton("✏️ Bot Adı", callback_data="marka_isim")],
+                [InlineKeyboardButton("👥 Admin Yetki Yönetimi", callback_data="m_admin_yetki")],
                 [InlineKeyboardButton("🔙 Geri", callback_data="ana")],
             ]))
-    elif d=="marka_isim": await q.edit_message_text("Yeni bot adı yaz:\n\nİptal: /iptal", reply_markup=geri_kb("m_ayar")); context.user_data["bekle"]="marka_isim"
-    elif d=="admin_ekle": await q.edit_message_text("Eklenecek admin ID'sini yaz:\n\nİptal: /iptal", reply_markup=geri_kb("m_ayar")); context.user_data["bekle"]="admin_ekle"
-    elif d=="admin_sil_menu":
-        rows=[[InlineKeyboardButton(f"❌ {a}",callback_data=f"admin_sil_{a}")] for a in c["adminler"]]
-        rows.append([InlineKeyboardButton("🔙",callback_data="m_ayar")])
-        await q.edit_message_text("Silinecek admini seç:", reply_markup=InlineKeyboardMarkup(rows))
-    elif d.startswith("admin_sil_"):
-        aid=int(d.split("_")[-1])
-        if aid in c["adminler"] and len(c["adminler"])>1: c["adminler"].remove(aid); save(c); await q.answer("✅ Silindi!",show_alert=True)
-        else: await q.answer("❌ Son admin silinemez!",show_alert=True)
-        await cb(update,context)
+    elif d == "marka_isim":
+        await q.edit_message_text("✏️ Yeni bot adını yaz:\n\nİptal: /iptal", reply_markup=geri_kb("m_ayar"))
+        context.user_data["bekle"] = "marka_isim"
 
     # İSTATİSTİK
     elif d == "m_stat":
