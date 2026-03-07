@@ -1942,72 +1942,312 @@ async def satin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"✅ <b>Satın Alındı!</b>\n\n{urun['isim']}\n💰 Kalan: <b>{yeni:,} puan</b>\n\nYönetici onaylayacak!", parse_mode="HTML")
 
 # ── YENİ MAIN ───────────────────────────────────────────────────
+
+# ══════════════════════════════════════════════════════════════
+#  mesaj_handler_v2 + Admin Yetki Sistemi (Düzeltilmiş)
+# ══════════════════════════════════════════════════════════════
+
+# Admin yetki seviyeleri
+# 3 = Süper Admin  |  2 = Moderatör  |  1 = Yardımcı
+YETKILER = {
+    "ban": 2, "kick": 2, "mute": 2,
+    "warn": 1, "casino": 2,
+    "bakiye_ver": 3, "kanal_ekle": 3,
+    "ayarlar": 3, "lisans": 3,
+}
+
+def admin_seviye(uid):
+    c = cfg()
+    if uid in c.get("adminler", []):
+        return c.get("adminler_seviye", {}).get(str(uid), 3)
+    return 0
+
+def yetki_var_mi(uid, islem):
+    return admin_seviye(uid) >= YETKILER.get(islem, 3)
+
+# ── ADMİN YETKİ MENÜSÜ ─────────────────────────────────────
+async def admin_yetki_menu(query):
+    c = cfg()
+    adminler_seviye = c.get("adminler_seviye", {})
+    SEV_EMOJI = {3: "👑", 2: "🛡", 1: "⭐"}
+    SEV_ISIM  = {3: "Süper Admin", 2: "Moderatör", 1: "Yardımcı"}
+    satirlar = [
+        f"{SEV_EMOJI.get(adminler_seviye.get(str(uid2), 3), '👑')} "
+        f"<code>{uid2}</code> — {SEV_ISIM.get(adminler_seviye.get(str(uid2), 3), 'Süper Admin')}"
+        for uid2 in c.get("adminler", [])
+    ]
+    await query.edit_message_text(
+        f"👥 <b>Admin Yetki Yönetimi</b>\n\n"
+        + "\n".join(satirlar) +
+        "\n\n👑 Süper Admin — Her şey\n"
+        "🛡 Moderatör — Ban/Kick/Mute/Casino\n"
+        "⭐ Yardımcı — Warn/Mesaj silme",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("➕ Yeni Admin Ekle", callback_data="yadmin_ekle")],
+            [InlineKeyboardButton("✏️ Seviye Değiştir",  callback_data="yadmin_seviye_sec")],
+            [InlineKeyboardButton("➖ Admin Sil",         callback_data="yadmin_sil_menu")],
+            [InlineKeyboardButton("📋 Yetki Tablosu",    callback_data="yadmin_tablo")],
+            [InlineKeyboardButton("🔙 Geri",             callback_data="m_ayar")],
+        ])
+    )
+
+# ── cb_v2: Admin yetki + oyun menüsü callbackları ──────────
+async def cb_v2(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q: return
+    await q.answer()
+    d = q.data
+    uid = q.from_user.id
+
+    # ── Admin yetki menüsü
+    if d == "m_admin_yetki":
+        if admin_seviye(uid) < 3:
+            return await q.answer("❌ Sadece Süper Admin erişebilir!", show_alert=True)
+        await admin_yetki_menu(q)
+
+    elif d == "yadmin_ekle":
+        if admin_seviye(uid) < 3:
+            return await q.answer("❌ Yetki yok!", show_alert=True)
+        await q.edit_message_text(
+            "➕ <b>Yeni Admin Ekle</b>\n\n"
+            "Şu formatı yaz:\n<code>USER_ID SEVİYE</code>\n\n"
+            "👑 3 = Süper Admin\n🛡 2 = Moderatör\n⭐ 1 = Yardımcı\n\n"
+            "Örnek: <code>123456789 2</code>\n\nİptal: /iptal",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Geri", callback_data="m_admin_yetki")]]))
+        context.user_data["bekle"] = "yadmin_ekle"
+
+    elif d == "yadmin_seviye_sec":
+        if admin_seviye(uid) < 3:
+            return await q.answer("❌ Yetki yok!", show_alert=True)
+        c = cfg()
+        SEV_EMOJI = {3: "👑", 2: "🛡", 1: "⭐"}
+        adminler_seviye = c.get("adminler_seviye", {})
+        rows = [
+            [InlineKeyboardButton(
+                f"{SEV_EMOJI.get(adminler_seviye.get(str(a), 3), '👑')} {a}",
+                callback_data=f"yadmin_sec_{a}"
+            )]
+            for a in c.get("adminler", [])
+        ]
+        rows.append([InlineKeyboardButton("🔙 Geri", callback_data="m_admin_yetki")])
+        await q.edit_message_text(
+            "✏️ Seviyesini değiştireceğin admini seç:",
+            reply_markup=InlineKeyboardMarkup(rows))
+
+    elif d.startswith("yadmin_sec_"):
+        hedef = d.split("_")[-1]
+        await q.edit_message_text(
+            f"👤 <b>ID {hedef}</b> için yeni rol seç:",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("👑 Süper Admin", callback_data=f"yadmin_set_{hedef}_3")],
+                [InlineKeyboardButton("🛡 Moderatör",   callback_data=f"yadmin_set_{hedef}_2")],
+                [InlineKeyboardButton("⭐ Yardımcı",    callback_data=f"yadmin_set_{hedef}_1")],
+                [InlineKeyboardButton("🔙 Geri", callback_data="yadmin_seviye_sec")],
+            ]))
+
+    elif d.startswith("yadmin_set_"):
+        parcalar = d.split("_")
+        hedef_uid, yeni_sev = parcalar[-2], int(parcalar[-1])
+        c = cfg()
+        if "adminler_seviye" not in c: c["adminler_seviye"] = {}
+        c["adminler_seviye"][str(hedef_uid)] = yeni_sev
+        save(c)
+        SEV_ISIM = {3: "Süper Admin", 2: "Moderatör", 1: "Yardımcı"}
+        await q.answer(f"✅ {SEV_ISIM[yeni_sev]} olarak ayarlandı!", show_alert=True)
+        await admin_yetki_menu(q)
+
+    elif d == "yadmin_sil_menu":
+        if admin_seviye(uid) < 3:
+            return await q.answer("❌ Yetki yok!", show_alert=True)
+        c = cfg()
+        rows = [[InlineKeyboardButton(f"❌ {a}", callback_data=f"yadmin_sil_{a}")] for a in c["adminler"]]
+        rows.append([InlineKeyboardButton("🔙 Geri", callback_data="m_admin_yetki")])
+        await q.edit_message_text("➖ Silinecek admini seç:", reply_markup=InlineKeyboardMarkup(rows))
+
+    elif d.startswith("yadmin_sil_"):
+        aid = int(d.split("_")[-1])
+        c = cfg()
+        if aid == uid:
+            return await q.answer("❌ Kendini silemezsin!", show_alert=True)
+        if len(c["adminler"]) <= 1:
+            return await q.answer("❌ Son admin silinemez!", show_alert=True)
+        if aid in c["adminler"]:
+            c["adminler"].remove(aid)
+            c.get("adminler_seviye", {}).pop(str(aid), None)
+            save(c)
+            await q.answer("✅ Admin silindi!", show_alert=True)
+        await admin_yetki_menu(q)
+
+    elif d == "yadmin_tablo":
+        await q.edit_message_text(
+            "📋 <b>Yetki Tablosu</b>\n\n"
+            "👑 <b>Süper Admin (3)</b>\n"
+            "• Tüm ayarlar, kanal yönetimi\n"
+            "• Admin ekle/sil/seviye değiştir\n"
+            "• Manuel bakiye ver/al\n"
+            "• Lisans yönetimi\n\n"
+            "🛡 <b>Moderatör (2)</b>\n"
+            "• /ban /kick /mute /unmute\n"
+            "• Casino açma/kapama\n"
+            "• Anket oluşturma\n\n"
+            "⭐ <b>Yardımcı (1)</b>\n"
+            "• /warn komutu\n"
+            "• Mesaj silme\n"
+            "• /kurallar güncelleme",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Geri", callback_data="m_admin_yetki")]]))
+
+    # ── Oyun menüsü
+    elif d == "m_oyunlar":
+        c = cfg()
+        await q.edit_message_text(
+            f"🎮 <b>Casino Oyunları</b>\n\nDurum: {'🟢 Aktif' if c['casino_aktif'] else '🔴 Pasif'}\n\n"
+            "🎲 /zar  🪙 /tura  🎰 /slot  🎡 /rulet\n"
+            "💣 /mines  🎣 /balik  🔢 /tahmin  🃏 /kart\n"
+            "📊 /ya  🎱 /tombala  ⚔️ /savas  🎁 /hediye\n"
+            "🎳 /bowling  🎯 /dart  🏀 /basketbol  ⚽ /penalti",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔴 Kapat" if c["casino_aktif"] else "🟢 Aç", callback_data="casino_toggle")],
+                [InlineKeyboardButton("🔙 Geri", callback_data="ana")],
+            ]))
+
+    # ── Geri kalan her callback orijinal cb'ye gider
+    else:
+        await cb(update, context)
+
+
+# ── mesaj_handler_v2: Admin giriş bekle + aktiflik puanı ───
+async def mesaj_handler_v2(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message: return
+    uid = update.effective_user.id
+    bekle = context.user_data.get("bekle")
+
+    # ── Yeni admin ekleme (yetki sistemi)
+    if bekle == "yadmin_ekle" and update.message.text and is_admin(uid):
+        try:
+            parcalar = update.message.text.strip().split()
+            yeni_uid, sev = int(parcalar[0]), int(parcalar[1])
+            if sev not in [1, 2, 3]:
+                return await update.message.reply_text("❌ Seviye 1, 2 veya 3 olmalı!")
+            c = cfg()
+            if yeni_uid not in c["adminler"]:
+                c["adminler"].append(yeni_uid)
+            if "adminler_seviye" not in c:
+                c["adminler_seviye"] = {}
+            c["adminler_seviye"][str(yeni_uid)] = sev
+            save(c)
+            context.user_data["bekle"] = None
+            SEV_ISIM = {3: "👑 Süper Admin", 2: "🛡 Moderatör", 1: "⭐ Yardımcı"}
+            await update.message.reply_text(
+                f"✅ Admin eklendi!\n\n"
+                f"ID: <code>{yeni_uid}</code>\n"
+                f"Rol: <b>{SEV_ISIM[sev]}</b>",
+                parse_mode="HTML", reply_markup=ana_kb())
+        except (ValueError, IndexError):
+            await update.message.reply_text(
+                "❌ Hatalı format!\n\nDoğru: <code>123456789 2</code>",
+                parse_mode="HTML")
+        return
+
+    # ── Aktiflik puanı (dakikada 1 puan, spam önlemeli)
+    c = cfg()
+    if c.get("bakiye_aktif") and update.message.text and not is_admin(uid):
+        uid_str = str(uid)
+        isim = update.effective_user.first_name or "?"
+        simdi_dk = datetime.now().strftime("%Y-%m-%d %H:%M")
+        son = c.get("son_aktiflik_puani", {}).get(uid_str, "")
+        if son != simdi_dk:
+            c.setdefault("son_aktiflik_puani", {})[uid_str] = simdi_dk
+            add_puan(c, uid_str, isim, 1)
+
+    # ── Geri kalan mesajları orijinal handler'a yolla
+    await mesaj_handler(update, context)
+
+
+# ══════════════════════════════════════════════════════════════
+#  MAIN
+# ══════════════════════════════════════════════════════════════
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
-    # Admin komutları
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("iptal", iptal))
-    app.add_handler(CommandHandler("otosil", otosil_cmd))
-    app.add_handler(CommandHandler("emojisil", emojisil_cmd))
-    app.add_handler(CommandHandler("butonsil", butonsil_cmd))
-    app.add_handler(CommandHandler("onayla", onayla_cmd))
-    app.add_handler(CommandHandler("destek", destek_cmd))
-    app.add_handler(CommandHandler("cevap", cevap_cmd))
-    app.add_handler(CommandHandler("yasakekle", yasakekle_cmd))
-    app.add_handler(CommandHandler("yasaksil", yasaksil_cmd))
-    app.add_handler(CommandHandler("anket", anket_cmd))
-    app.add_handler(CommandHandler("ver", ver_cmd))
-    app.add_handler(CommandHandler("al", al_cmd))
-    app.add_handler(CommandHandler("sifirla", sifirla_cmd))
+
+    # Admin
+    app.add_handler(CommandHandler("start",      start))
+    app.add_handler(CommandHandler("iptal",      iptal))
+    app.add_handler(CommandHandler("otosil",     otosil_cmd))
+    app.add_handler(CommandHandler("emojisil",   emojisil_cmd))
+    app.add_handler(CommandHandler("butonsil",   butonsil_cmd))
+    app.add_handler(CommandHandler("onayla",     onayla_cmd))
+    app.add_handler(CommandHandler("destek",     destek_cmd))
+    app.add_handler(CommandHandler("cevap",      cevap_cmd))
+    app.add_handler(CommandHandler("yasakekle",  yasakekle_cmd))
+    app.add_handler(CommandHandler("yasaksil",   yasaksil_cmd))
+    app.add_handler(CommandHandler("anket",      anket_cmd))
+    app.add_handler(CommandHandler("ver",        ver_cmd))
+    app.add_handler(CommandHandler("al",         al_cmd))
+    app.add_handler(CommandHandler("sifirla",    sifirla_cmd))
+
     # Moderasyon
-    app.add_handler(CommandHandler("warn", warn_cmd))
-    app.add_handler(CommandHandler("ban", ban_cmd))
-    app.add_handler(CommandHandler("kick", kick_cmd))
-    app.add_handler(CommandHandler("mute", mute_cmd))
-    app.add_handler(CommandHandler("unmute", unmute_cmd))
+    app.add_handler(CommandHandler("warn",     warn_cmd))
+    app.add_handler(CommandHandler("ban",      ban_cmd))
+    app.add_handler(CommandHandler("kick",     kick_cmd))
+    app.add_handler(CommandHandler("mute",     mute_cmd))
+    app.add_handler(CommandHandler("unmute",   unmute_cmd))
     app.add_handler(CommandHandler("kurallar", kurallar_cmd))
-    # Kullanıcı - Ekonomi
-    app.add_handler(CommandHandler("bakiye", bakiye_cmd))
-    app.add_handler(CommandHandler("bonus", bonus_cmd))
-    app.add_handler(CommandHandler("transfer", transfer_cmd))
-    app.add_handler(CommandHandler("top", top_cmd))
-    app.add_handler(CommandHandler("ref", ref_cmd))
-    app.add_handler(CommandHandler("uyeol", uyeol_cmd))
-    app.add_handler(CommandHandler("gorev", gorev_cmd))
-    app.add_handler(CommandHandler("market", market_cmd))
-    app.add_handler(CommandHandler("satin", satin_cmd))
-    # Casino - Temel
-    app.add_handler(CommandHandler("zar", zar_cmd))
-    app.add_handler(CommandHandler("tura", tura_cmd))
-    app.add_handler(CommandHandler("slot", slot_cmd))
-    app.add_handler(CommandHandler("rulet", rulet_cmd))
-    # Casino - v5.1
-    app.add_handler(CommandHandler("mines", mines_cmd))
-    app.add_handler(CommandHandler("balik", balik_cmd))
-    app.add_handler(CommandHandler("tahmin", tahmin_cmd))
-    app.add_handler(CommandHandler("kart", kart_cmd))
-    app.add_handler(CommandHandler("ya", yuksek_alcak_cmd))
-    app.add_handler(CommandHandler("tombala", tombala_cmd))
-    app.add_handler(CommandHandler("savas", savas_cmd))
-    app.add_handler(CommandHandler("hediye", hediye_cmd))
-    # Casino - v5.2 Spor
-    app.add_handler(CommandHandler("bowling", bowling_cmd))
-    app.add_handler(CommandHandler("dart", dart_cmd))
+
+    # Kullanıcı / Ekonomi
+    app.add_handler(CommandHandler("bakiye",  bakiye_cmd))
+    app.add_handler(CommandHandler("bonus",   bonus_cmd))
+    app.add_handler(CommandHandler("transfer",transfer_cmd))
+    app.add_handler(CommandHandler("top",     top_cmd))
+    app.add_handler(CommandHandler("ref",     ref_cmd))
+    app.add_handler(CommandHandler("uyeol",   uyeol_cmd))
+    app.add_handler(CommandHandler("gorev",   gorev_cmd))
+    app.add_handler(CommandHandler("market",  market_cmd))
+    app.add_handler(CommandHandler("satin",   satin_cmd))
+
+    # Casino — Temel
+    app.add_handler(CommandHandler("zar",     zar_cmd))
+    app.add_handler(CommandHandler("tura",    tura_cmd))
+    app.add_handler(CommandHandler("slot",    slot_cmd))
+    app.add_handler(CommandHandler("rulet",   rulet_cmd))
+
+    # Casino — Ek oyunlar
+    app.add_handler(CommandHandler("mines",     mines_cmd))
+    app.add_handler(CommandHandler("balik",     balik_cmd))
+    app.add_handler(CommandHandler("tahmin",    tahmin_cmd))
+    app.add_handler(CommandHandler("kart",      kart_cmd))
+    app.add_handler(CommandHandler("ya",        yuksek_alcak_cmd))
+    app.add_handler(CommandHandler("tombala",   tombala_cmd))
+    app.add_handler(CommandHandler("savas",     savas_cmd))
+    app.add_handler(CommandHandler("hediye",    hediye_cmd))
+
+    # Casino — Spor
+    app.add_handler(CommandHandler("bowling",   bowling_cmd))
+    app.add_handler(CommandHandler("dart",      dart_cmd))
     app.add_handler(CommandHandler("basketbol", basketbol_cmd))
-    app.add_handler(CommandHandler("penalti", futbol_cmd))
+    app.add_handler(CommandHandler("penalti",   futbol_cmd))
+
     # Kripto
     app.add_handler(CommandHandler("kripto", kripto_cmd))
-    app.add_handler(CommandHandler("btc", btc_cmd))
-    app.add_handler(CommandHandler("eth", eth_cmd))
-    app.add_handler(CommandHandler("ton", ton_cmd))
+    app.add_handler(CommandHandler("btc",    btc_cmd))
+    app.add_handler(CommandHandler("eth",    eth_cmd))
+    app.add_handler(CommandHandler("ton",    ton_cmd))
+
     # Handlers
     app.add_handler(CallbackQueryHandler(cb_v2))
     app.add_handler(ChatJoinRequestHandler(join_handler))
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, yeni_uye))
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, mesaj_handler_v2))
+
+    # Jobs
     app.job_queue.run_repeating(oto_job, interval=3600, first=60)
     app.job_queue.run_repeating(rss_job, interval=3600, first=120)
-    print("🚀 TG Suite Pro v5.2 başlatıldı!")
+
+    print("🚀 TG Suite Pro v5.3 başlatıldı!")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
