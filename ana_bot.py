@@ -68,9 +68,21 @@ DEFAULT = {
     "ref_kayitlar": {},      # {davet_eden: [davet_edilen...]}
     # ── BAKİYE & PUAN ──
     "bakiye_aktif": True,
-    "bakiyeler": {},         # {user_id: {"puan": 0, "isim": ""}}
-    "gunluk_bonus": 50,
-    "gunluk_bonus_al": {},   # {user_id: "2024-01-01"}
+    "bakiyeler": {},
+    "gunluk_bonus": 100,
+    "gunluk_bonus_al": {},
+    "streak_bonus_katsayi": 20,
+    "streak_max": 7,
+    "streak_kayitlar": {},
+    "haftalik_bonus": 500,
+    "haftalik_bonus_al": {},
+    "aktiflik_puan": 2,
+    "seviye_esikleri": {"1":0,"2":500,"3":1500,"4":3000,"5":6000,"6":10000,"7":20000,"8":35000,"9":50000,"10":75000},
+    "seviye_rozetleri": {"1":"1","2":"2","3":"3","4":"4","5":"5","6":"6","7":"7","8":"8","9":"9","10":"10"},
+    "vip_esik": 10000,
+    "vip_bonus_katsayi": 1.5,
+    "transfer_min": 10,
+    "puan_carpan": 1.0,
     # ── CASİNO ──
     "casino_aktif": True,
     "casino_min_bahis": 10,
@@ -108,12 +120,37 @@ def is_admin(uid):
 def bugun(): return datetime.now().strftime("%Y-%m-%d")
 
 def get_bakiye(c, uid):
-    return c["bakiyeler"].setdefault(str(uid), {"puan": 0, "isim": "?"})
+    return c["bakiyeler"].setdefault(str(uid), {"puan":0,"isim":"?","toplam":0,"seviye":1})
+
+def hesapla_seviye(c, puan):
+    e = c.get("seviye_esikleri",{"1":0,"2":500,"3":1500,"4":3000,"5":6000,"6":10000,"7":20000,"8":35000,"9":50000,"10":75000})
+    r = c.get("seviye_rozetleri",{"1":chr(127807),"2":chr(11088),"3":chr(127775),"4":chr(128171),"5":chr(128293),"6":chr(128142),"7":chr(128081),"8":chr(128640),"9":chr(127942),"10":chr(127752)})
+    sev = 1
+    for s,esik in sorted(e.items(), key=lambda x: int(x[0])):
+        if puan >= int(esik): sev = int(s)
+    return sev, r.get(str(sev),"*")
+
+def sonraki_seviye(c, puan):
+    e = c.get("seviye_esikleri",{"1":0,"2":500,"3":1500,"4":3000,"5":6000,"6":10000,"7":20000,"8":35000,"9":50000,"10":75000})
+    for s,esik in sorted(e.items(), key=lambda x: int(x[0])):
+        if int(esik) > puan: return int(esik), int(s)
+    return None, 10
+
+def is_vip(c, uid):
+    b = get_bakiye(c, str(uid))
+    return b["puan"] >= c.get("vip_esik", 10000)
 
 def add_puan(c, uid, isim, miktar):
     b = get_bakiye(c, uid)
-    b["puan"] = max(0, b["puan"] + miktar)
+    carpan = c.get("puan_carpan", 1.0)
+    if miktar > 0 and is_vip(c, str(uid)):
+        carpan *= c.get("vip_bonus_katsayi", 1.5)
+    gercek = int(miktar * carpan) if miktar > 0 else miktar
+    b["puan"] = max(0, b["puan"] + gercek)
+    if miktar > 0: b["toplam"] = b.get("toplam",0) + gercek
     b["isim"] = isim
+    sev, _ = hesapla_seviye(c, b["puan"])
+    b["seviye"] = sev
     save(c)
     return b["puan"]
 
@@ -392,58 +429,99 @@ async def cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # CASİNO
     elif d == "m_casino":
         await q.edit_message_text(
-            f"🎰 <b>Casino Modülü</b>\n\n"
-            f"Durum: {'🟢 Aktif' if c['casino_aktif'] else '🔴 Pasif'}\n"
-            f"Min bahis: <b>{c['casino_min_bahis']} puan</b>\n"
-            f"Max bahis: <b>{c['casino_max_bahis']} puan</b>\n\n"
-            f"<b>🎮 18 Oyun:</b>\n"
-            f"🎲 /zar  🪙 /tura  🎰 /slot  🎡 /rulet\n"
-            f"💣 /mines  🎣 /balik  🔢 /tahmin  🃏 /kart\n"
-            f"📊 /ya  🎱 /tombala  ⚔️ /savas  🎁 /hediye\n"
-            f"🎳 /bowling  🎯 /dart  🏀 /basketbol  ⚽ /penalti",
+            f"🎰 <b>Casino Modülü</b>\n\nDurum: {'🟢' if c['casino_aktif'] else '🔴'}\n"
+            f"Min bahis: {c['casino_min_bahis']} puan\nMax bahis: {c['casino_max_bahis']} puan\n\n"
+            f"<b>Kullanıcı komutları:</b>\n"
+            f"/zar [bahis] — Zar at\n/tura [bahis] — Yazı tura\n"
+            f"/rulet [bahis] — Rulet\n/slot [bahis] — Slot makinesi\n/jackpot — Büyük ikramiye",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔴 Kapat" if c["casino_aktif"] else "🟢 Aç", callback_data="casino_toggle")],
                 [InlineKeyboardButton("💰 Min Bahis", callback_data="casino_min"), InlineKeyboardButton("💎 Max Bahis", callback_data="casino_max")],
                 [InlineKeyboardButton("🔙 Geri", callback_data="ana")],
             ]))
-    elif d=="casino_toggle": c["casino_aktif"]=not c["casino_aktif"]; save(c); await cb_v2(update,context)
+    elif d=="casino_toggle": c["casino_aktif"]=not c["casino_aktif"]; save(c); await cb(update,context)
     elif d=="casino_min": await q.edit_message_text("Min bahis miktarı (puan):\n\nİptal: /iptal", reply_markup=geri_kb("m_casino")); context.user_data["bekle"]="casino_min"
     elif d=="casino_max": await q.edit_message_text("Max bahis miktarı (puan):\n\nİptal: /iptal", reply_markup=geri_kb("m_casino")); context.user_data["bekle"]="casino_max"
 
     # BAKİYE
     elif d == "m_bakiye":
-        top_puan=sum(v.get("puan",0) for v in c["bakiyeler"].values())
+        top_puan = sum(v.get("puan",0) for v in c["bakiyeler"].values())
+        vip_n = sum(1 for u2,v in c["bakiyeler"].items() if is_vip(c,u2))
+        str_max = max((c.get("streak_kayitlar",{}).get(u,{}).get("gun",0) for u in c["bakiyeler"]),default=0)
+        durum = "Acik" if c["bakiye_aktif"] else "Kapali"
         await q.edit_message_text(
-            f"💸 <b>Bakiye & Puan Sistemi</b>\n\nDurum: {'🟢' if c['bakiye_aktif'] else '🔴'}\n"
-            f"Kayıtlı: {len(c['bakiyeler'])} kişi\nToplam puan: {top_puan:,}\n"
-            f"Günlük bonus: {c['gunluk_bonus']} puan\n\n"
-            f"<b>Kullanıcı komutları:</b>\n"
-            f"/bakiye — Bakiyemi gör\n/bonus — Günlük bonus al\n"
-            f"/transfer [kullanıcı] [miktar] — Transfer\n/top — Liderlik tablosu",
+            "<b>Bakiye ve Puan Sistemi</b>\n\n"
+            f"Durum: {durum}\n"
+            f"Kayitli: {len(c['bakiyeler'])} kisi | VIP: {vip_n}\n"
+            f"Toplam puan: {top_puan:,} | En uzun seri: {str_max} gun\n\n"
+            f"Gunluk bonus: {c['gunluk_bonus']} puan\n"
+            f"Haftalik bonus: {c.get('haftalik_bonus',500)} puan\n"
+            f"Seri katsayisi: +{c.get('streak_bonus_katsayi',20)} puan/gun (maks {c.get('streak_max',7)} gun)\n"
+            f"Aktiflik: {c.get('aktiflik_puan',2)} puan/dk\n"
+            f"Davet odulu: {c['ref_odul']} puan/kisi\n"
+            f"VIP esigi: {c.get('vip_esik',10000):,} puan (x{c.get('vip_bonus_katsayi',1.5)})\n"
+            f"Puan carpani: {c.get('puan_carpan',1.0)}x",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔴 Kapat" if c["bakiye_aktif"] else "🟢 Aç", callback_data="bakiye_toggle")],
-                [InlineKeyboardButton("🎁 Bonus Ayarla", callback_data="bakiye_bonus"), InlineKeyboardButton("💸 Manuel Ver", callback_data="bakiye_ver")],
-                [InlineKeyboardButton("🏆 Liderlik", callback_data="bakiye_top"), InlineKeyboardButton("🔄 Sıfırla", callback_data="bakiye_sifirla_onay")],
-                [InlineKeyboardButton("🔙 Geri", callback_data="ana")],
+                [InlineKeyboardButton("Ac/Kapat", callback_data="bakiye_toggle")],
+                [InlineKeyboardButton("Gunluk Bonus", callback_data="bakiye_bonus"),
+                 InlineKeyboardButton("Haftalik Bonus", callback_data="bakiye_haftalik")],
+                [InlineKeyboardButton("Seri Ayarla", callback_data="bakiye_streak"),
+                 InlineKeyboardButton("Aktiflik Puani", callback_data="bakiye_aktiflik")],
+                [InlineKeyboardButton("VIP Esigi", callback_data="bakiye_vip"),
+                 InlineKeyboardButton("Puan Carpani", callback_data="bakiye_carpan")],
+                [InlineKeyboardButton("Manuel Ver/Al", callback_data="bakiye_ver"),
+                 InlineKeyboardButton("Liderlik Top10", callback_data="bakiye_top")],
+                [InlineKeyboardButton("Seviye Tablosu", callback_data="bakiye_seviye_tablo"),
+                 InlineKeyboardButton("Tumunu Sifirla", callback_data="bakiye_sifirla_onay")],
+                [InlineKeyboardButton("Geri", callback_data="ana")],
             ]))
-    elif d=="bakiye_toggle": c["bakiye_aktif"]=not c["bakiye_aktif"]; save(c); await cb(update,context)
-    elif d=="bakiye_bonus": await q.edit_message_text("Günlük bonus miktarı (puan):\n\nİptal: /iptal", reply_markup=geri_kb("m_bakiye")); context.user_data["bekle"]="gunluk_bonus"
-    elif d=="bakiye_ver": await q.edit_message_text("Format: <code>[user_id] [miktar]</code>\n\nİptal: /iptal", parse_mode="HTML", reply_markup=geri_kb("m_bakiye")); context.user_data["bekle"]="bakiye_ver"
-    elif d=="bakiye_top":
-        sirali=sorted(c["bakiyeler"].items(), key=lambda x: x[1].get("puan",0), reverse=True)[:10]
-        txt="\n".join([f"{'🥇🥈🥉'[i] if i<3 else f'{i+1}.'} {v.get('isim','?')} — {v.get('puan',0):,} puan" for i,(uid2,v) in enumerate(sirali)]) or "Henüz kimse yok."
-        await q.edit_message_text(f"🏆 <b>Liderlik Tablosu:</b>\n\n{txt}", parse_mode="HTML", reply_markup=geri_kb("m_bakiye"))
-    elif d=="bakiye_sifirla_onay":
-        await q.edit_message_text("⚠️ Tüm bakiyeleri sıfırlamak istediğine emin misin?", reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ Evet, Sıfırla", callback_data="bakiye_sifirla"), InlineKeyboardButton("❌ İptal", callback_data="m_bakiye")]]))
-    elif d=="bakiye_sifirla": c["bakiyeler"]={};  save(c); await q.answer("✅ Tüm bakiyeler sıfırlandı!",show_alert=True); await cb(update,context)
-
-    # REFERANS
-    elif d == "m_ref":
-        top_ref=sorted(c["ref_kayitlar"].items(), key=lambda x: len(x[1]), reverse=True)[:5]
-        txt="\n".join([f"{i+1}. ID {uid2} — {len(davetler)} davet" for i,(uid2,davetler) in enumerate(top_ref)]) or "Henüz davet yok."
+    elif d == "bakiye_toggle":
+        c["bakiye_aktif"] = not c["bakiye_aktif"]; save(c); await cb(update,context)
+    elif d == "bakiye_bonus":
+        await q.edit_message_text(f"Gunluk Bonus\n\nSu an: {c['gunluk_bonus']} puan\n\nYeni miktar (ornek: 100):\n/iptal", reply_markup=geri_kb("m_bakiye"))
+        context.user_data["bekle"] = "gunluk_bonus"
+    elif d == "bakiye_haftalik":
+        await q.edit_message_text(f"Haftalik Bonus\n\nSu an: {c.get('haftalik_bonus',500)} puan\n\nYeni miktar:\n/iptal", reply_markup=geri_kb("m_bakiye"))
+        context.user_data["bekle"] = "haftalik_bonus"
+    elif d == "bakiye_streak":
+        await q.edit_message_text(f"Seri Bonusu\n\nKatsayi: +{c.get('streak_bonus_katsayi',20)} puan/gun\nMaks gun: {c.get('streak_max',7)}\n\nYaz: [katsayi] [maks_gun]\nOrnek: 20 7\n/iptal", reply_markup=geri_kb("m_bakiye"))
+        context.user_data["bekle"] = "streak_ayar"
+    elif d == "bakiye_aktiflik":
+        await q.edit_message_text(f"Aktiflik Puani\n\nSu an: {c.get('aktiflik_puan',2)} puan/dk\n0 = kapali\n\nYeni miktar:\n/iptal", reply_markup=geri_kb("m_bakiye"))
+        context.user_data["bekle"] = "aktiflik_puan"
+    elif d == "bakiye_vip":
+        await q.edit_message_text(f"VIP Sistemi\n\nEsik: {c.get('vip_esik',10000):,} puan\nBonus: x{c.get('vip_bonus_katsayi',1.5)}\n\nYaz: [esik] [katsayi]\nOrnek: 10000 1.5\n/iptal", reply_markup=geri_kb("m_bakiye"))
+        context.user_data["bekle"] = "vip_ayar"
+    elif d == "bakiye_carpan":
+        await q.edit_message_text(f"Puan Carpani\n\nSu an: {c.get('puan_carpan',1.0)}x\n1.0=normal, 2.0=cift puan\n\nYeni carpan:\n/iptal", reply_markup=geri_kb("m_bakiye"))
+        context.user_data["bekle"] = "puan_carpan"
+    elif d == "bakiye_ver":
+        await q.edit_message_text("Manuel Ver/Al\n\n[user_id] [miktar]\nNegatif = puan al\nOrnek: 123456789 500\n/iptal", reply_markup=geri_kb("m_bakiye"))
+        context.user_data["bekle"] = "bakiye_ver"
+    elif d == "bakiye_top":
+        sirali = sorted(c["bakiyeler"].items(),key=lambda x:x[1].get("puan",0),reverse=True)[:10]
+        md = ["1.", "2.", "3."]
+        satirlar = []
+        for i,(uid2,v) in enumerate(sirali):
+            sev,_ = hesapla_seviye(c,v.get("puan",0))
+            vtag = "[VIP]" if is_vip(c,uid2) else ""
+            satirlar.append(f"{md[i] if i<3 else str(i+1)+'.'} {vtag}Sev{sev} {v.get('isim','?')}: {v.get('puan',0):,}")
+        txt = "\n".join(satirlar) or "Henuz kimse yok."
+        await q.edit_message_text(f"<b>Liderlik Top 10</b>\n\n{txt}", parse_mode="HTML", reply_markup=geri_kb("m_bakiye"))
+    elif d == "bakiye_seviye_tablo":
+        esikler = c.get("seviye_esikleri",{})
+        txt = "\n".join([f"Seviye {s}: {int(e):,} puan" for s,e in sorted(esikler.items(),key=lambda x:int(x[0]))])
+        await q.edit_message_text(f"<b>Seviye Tablosu</b>\n\n{txt}", parse_mode="HTML", reply_markup=geri_kb("m_bakiye"))
+    elif d == "bakiye_sifirla_onay":
+        await q.edit_message_text("Tum bakiyeler, seriler, seviyeler silinecek. Emin misin?",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Evet Sifirla",callback_data="bakiye_sifirla"),
+                 InlineKeyboardButton("Iptal",callback_data="m_bakiye")]]))
+    elif d == "bakiye_sifirla":
+        c["bakiyeler"]={};c["streak_kayitlar"]={};c["gunluk_bonus_al"]={};c["haftalik_bonus_al"]={}
+        save(c); await q.answer("Tum bakiyeler sifirlandı!",show_alert=True); await cb(update,context)
         await q.edit_message_text(
             f"🤝 <b>Referans Sistemi</b>\n\nDurum: {'🟢' if c['ref_aktif'] else '🔴'}\n"
             f"Davet başı ödül: {c['ref_odul']} puan\n\n"
@@ -497,27 +575,26 @@ async def cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         txt="\n\n".join([f"🎫#{tid}\n{t.get('isim','?')}: {t.get('mesaj','?')[:80]}" for tid,t in tickets]) or "Açık ticket yok."
         await q.edit_message_text(f"📋 Açık Ticketlar:\n\n{txt}", reply_markup=geri_kb("m_ticket"))
 
-    # AYARLAR — YENİ YETKİ SİSTEMİ
+    # AYARLAR
     elif d == "m_ayar":
-        SEV_EMOJI = {3: "👑", 2: "🛡", 1: "⭐"}
-        adminler_seviye = c.get("adminler_seviye", {})
-        admin_txt = "\n".join([
-            f"  {SEV_EMOJI.get(adminler_seviye.get(str(a), 3), '👑')} <code>{a}</code>"
-            for a in c["adminler"]
-        ])
-        await q.edit_message_text(
-            f"⚙️ <b>Marka & Admin</b>\n\n"
-            f"🤖 Bot adı: <b>{c.get('marka_isim','TG Suite Pro')}</b>\n\n"
-            f"👥 Adminler:\n{admin_txt}",
-            parse_mode="HTML",
+        admin_txt="\n".join([f"• <code>{a}</code>" for a in c["adminler"]])
+        await q.edit_message_text(f"⚙️ <b>Marka & Admin</b>\n\nBot adı: {c.get('marka_isim')}\nAdminler:\n{admin_txt}", parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("✏️ Bot Adı", callback_data="marka_isim")],
-                [InlineKeyboardButton("👥 Admin Yetki Yönetimi", callback_data="m_admin_yetki")],
+                [InlineKeyboardButton("✏️ Bot Adı", callback_data="marka_isim"), InlineKeyboardButton("➕ Admin Ekle", callback_data="admin_ekle")],
+                [InlineKeyboardButton("➖ Admin Sil", callback_data="admin_sil_menu")],
                 [InlineKeyboardButton("🔙 Geri", callback_data="ana")],
             ]))
-    elif d == "marka_isim":
-        await q.edit_message_text("✏️ Yeni bot adını yaz:\n\nİptal: /iptal", reply_markup=geri_kb("m_ayar"))
-        context.user_data["bekle"] = "marka_isim"
+    elif d=="marka_isim": await q.edit_message_text("Yeni bot adı yaz:\n\nİptal: /iptal", reply_markup=geri_kb("m_ayar")); context.user_data["bekle"]="marka_isim"
+    elif d=="admin_ekle": await q.edit_message_text("Eklenecek admin ID'sini yaz:\n\nİptal: /iptal", reply_markup=geri_kb("m_ayar")); context.user_data["bekle"]="admin_ekle"
+    elif d=="admin_sil_menu":
+        rows=[[InlineKeyboardButton(f"❌ {a}",callback_data=f"admin_sil_{a}")] for a in c["adminler"]]
+        rows.append([InlineKeyboardButton("🔙",callback_data="m_ayar")])
+        await q.edit_message_text("Silinecek admini seç:", reply_markup=InlineKeyboardMarkup(rows))
+    elif d.startswith("admin_sil_"):
+        aid=int(d.split("_")[-1])
+        if aid in c["adminler"] and len(c["adminler"])>1: c["adminler"].remove(aid); save(c); await q.answer("✅ Silindi!",show_alert=True)
+        else: await q.answer("❌ Son admin silinemez!",show_alert=True)
+        await cb(update,context)
 
     # İSTATİSTİK
     elif d == "m_stat":
@@ -539,22 +616,62 @@ async def cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # BAKİYE
 async def bakiye_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    c=cfg()
+    c = cfg()
     if not c["bakiye_aktif"]: return
-    uid=str(update.effective_user.id); isim=update.effective_user.first_name
-    b=get_bakiye(c, uid)
-    await update.message.reply_text(f"💸 <b>Bakiyen</b>\n\n💰 Puan: <b>{b['puan']:,}</b>\n\n/bonus ile günlük puan al!", parse_mode="HTML")
+    uid = str(update.effective_user.id)
+    b = get_bakiye(c, uid)
+    sev, rozet = hesapla_seviye(c, b["puan"])
+    son_puan, son_sev = sonraki_seviye(c, b["puan"])
+    streak = c.get("streak_kayitlar",{}).get(uid,{}).get("gun",0)
+    vip_tag = " [VIP]" if is_vip(c, uid) else ""
+    ref_n = len(c.get("ref_kayitlar",{}).get(uid,[]))
+    if son_puan:
+        sev_esik = int(c.get("seviye_esikleri",{}).get(str(sev),0))
+        dolu = int((b["puan"]-sev_esik) / max(1,son_puan-sev_esik) * 10)
+        kalan = son_puan - b["puan"]
+        bar = "#"*dolu + "."*(10-dolu) + f" Sev.{son_sev} ({kalan:,} kaldi)"
+    else:
+        bar = "MAKSIMUM SEVIYE!"
+    await update.message.reply_text(
+        f"<b>Bakiye Kart{vip_tag}</b>\n\n"
+        f"Seviye {sev} | {b['puan']:,} puan\n"
+        f"{bar}\n\n"
+        f"Toplam kazanilan: {b.get('toplam',0):,}\n"
+        f"Giris serisi: {streak} gun\n"
+        f"Davet: {ref_n} kisi\n\n"
+        f"/gorev /market /top /hbonus",
+        parse_mode="HTML")
 
 async def bonus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    c=cfg()
+    c = cfg()
     if not c["bakiye_aktif"]: return
-    uid=str(update.effective_user.id); isim=update.effective_user.first_name
-    son=c["gunluk_bonus_al"].get(uid,"")
-    if son==bugun():
-        return await update.message.reply_text("❌ Bugün bonusunu aldın! Yarın tekrar gel 🕐")
-    yeni=add_puan(c, uid, isim, c["gunluk_bonus"])
-    c["gunluk_bonus_al"][uid]=bugun(); save(c)
-    await update.message.reply_text(f"🎁 <b>Günlük Bonus!</b>\n\n+{c['gunluk_bonus']} puan kazandın!\n💰 Toplam: <b>{yeni:,}</b>", parse_mode="HTML")
+    uid = str(update.effective_user.id); isim = update.effective_user.first_name
+    son = c["gunluk_bonus_al"].get(uid,"")
+    if son == bugun():
+        streak = c.get("streak_kayitlar",{}).get(uid,{}).get("gun",0)
+        return await update.message.reply_text(f"Bugun bonusunu aldin!\n\nSerin: {streak} gun\nYarin tekrar gel.")
+    if "streak_kayitlar" not in c: c["streak_kayitlar"] = {}
+    sd = c["streak_kayitlar"].get(uid, {"gun":0,"son":""})
+    dun = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    if sd.get("son") == dun: sd["gun"] = min(sd["gun"]+1, c.get("streak_max",7))
+    else: sd["gun"] = 1
+    sd["son"] = bugun()
+    c["streak_kayitlar"][uid] = sd
+    gun = sd["gun"]
+    temel = c["gunluk_bonus"]
+    ekstra = int((gun-1) * c.get("streak_bonus_katsayi",20))
+    toplam_b = temel + ekstra
+    yeni = add_puan(c, uid, isim, toplam_b)
+    c["gunluk_bonus_al"][uid] = bugun(); save(c)
+    sev, _ = hesapla_seviye(c, yeni)
+    streak_bar = "F"*gun + "."*(c.get("streak_max",7)-gun)
+    msg = f"Gunluk Bonus!\n\nTemel: +{temel} puan\n"
+    if ekstra > 0: msg += f"Seri ({gun}. gun): +{ekstra} puan\n"
+    msg += f"---\nToplam: +{toplam_b} puan\n\n"
+    msg += f"[{streak_bar}] {gun}. gun serisi"
+    if gun == c.get("streak_max",7): msg += " MAKSIMUM!"
+    msg += f"\n\nSeviye {sev} | {yeni:,} puan"
+    await update.message.reply_text(msg)
 
 async def transfer_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     c=cfg()
@@ -578,10 +695,24 @@ async def transfer_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except: await update.message.reply_text("❌ Hata! Kullanım: /transfer [miktar] (yanıtlayarak)")
 
 async def top_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    c=cfg()
-    sirali=sorted(c["bakiyeler"].items(),key=lambda x:x[1].get("puan",0),reverse=True)[:10]
-    madalya=["🥇","🥈","🥉"]
-    txt="\n".join([f"{madalya[i] if i<3 else f'{i+1}.'} {v.get('isim','?')} — <b>{v.get('puan',0):,}</b>" for i,(uid2,v) in enumerate(sirali)]) or "Henüz kimse yok."
+    c = cfg()
+    uid = str(update.effective_user.id)
+    sirali = sorted(c["bakiyeler"].items(),key=lambda x:x[1].get("puan",0),reverse=True)
+    md = ["1.", "2.", "3."]
+    satirlar = []
+    for i,(uid2,v) in enumerate(sirali[:10]):
+        sev,_ = hesapla_seviye(c,v.get("puan",0))
+        vtag = "[VIP]" if is_vip(c,uid2) else ""
+        satirlar.append(f"{md[i] if i<3 else str(i+1)+'.'} {vtag}Sev{sev} {v.get('isim','?')}: {v.get('puan',0):,} puan")
+    kendi = next((i+1 for i,(u,_) in enumerate(sirali) if u==uid), None)
+    kendi_p = c["bakiyeler"].get(uid,{}).get("puan",0)
+    alt = f"\n\nSenin siran: {kendi}. | {kendi_p:,} puan" if kendi and kendi>10 else ""
+    await update.message.reply_text(
+        f"<b>Liderlik Tablosu</b>\n\n"
+        + "\n".join(satirlar or ["Henuz kimse yok."]) + alt
+        + f"\n\n{len(c['bakiyeler'])} kisi kayitli",
+        parse_mode="HTML")
+
     await update.message.reply_text(f"🏆 <b>Liderlik Tablosu</b>\n\n{txt}", parse_mode="HTML")
 
 # REFERANS
@@ -1016,6 +1147,31 @@ async def mesaj_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif bekle=="ref_odul":
         try: c["ref_odul"]=int(metin); save(c); context.user_data["bekle"]=None; await update.message.reply_text(f"✅ Ödül: {metin} puan", reply_markup=ana_kb())
         except: await update.message.reply_text("❌ Sayı gir.")
+    elif bekle=="haftalik_bonus":
+        try: c["haftalik_bonus"]=int(metin); save(c); context.user_data["bekle"]=None; await update.message.reply_text(f"Haftalik bonus: {metin} puan", reply_markup=ana_kb())
+        except: await update.message.reply_text("Sayi gir.")
+    elif bekle=="streak_ayar":
+        try:
+            p=metin.strip().split(); c["streak_bonus_katsayi"]=int(p[0]); c["streak_max"]=int(p[1]); save(c)
+            context.user_data["bekle"]=None; await update.message.reply_text(f"Seri: +{p[0]}/gun, maks {p[1]} gun", reply_markup=ana_kb())
+        except: await update.message.reply_text("Format: 20 7")
+    elif bekle=="aktiflik_puan":
+        try: c["aktiflik_puan"]=int(metin); save(c); context.user_data["bekle"]=None; await update.message.reply_text(f"Aktiflik: {metin} puan/dk", reply_markup=ana_kb())
+        except: await update.message.reply_text("Sayi gir (0=kapali)")
+    elif bekle=="vip_ayar":
+        try:
+            p=metin.strip().split(); c["vip_esik"]=int(p[0]); c["vip_bonus_katsayi"]=float(p[1]); save(c)
+            context.user_data["bekle"]=None; await update.message.reply_text(f"VIP: {int(p[0]):,} puan, x{float(p[1])}", reply_markup=ana_kb())
+        except: await update.message.reply_text("Format: 10000 1.5")
+    elif bekle=="puan_carpan":
+        try: c["puan_carpan"]=float(metin); save(c); context.user_data["bekle"]=None; await update.message.reply_text(f"Carpan: {metin}x", reply_markup=ana_kb())
+        except: await update.message.reply_text("Sayi gir (orn: 2.0)")
+    elif bekle=="bakiye_ver":
+        try:
+            p=metin.strip().split(); uid2,miktar=p[0],int(p[1])
+            yeni=add_puan(c,uid2,f"Kullanici {uid2}",miktar)
+            context.user_data["bekle"]=None; await update.message.reply_text(f"Tamam: {uid2} -> {miktar:+,} puan | Toplam: {yeni:,}", reply_markup=ana_kb())
+        except: await update.message.reply_text("Format: [user_id] [miktar]")
     elif bekle=="uyelik_fiyat":
         try:
             p=metin.strip().split("|"); plan,fiyat=p[0].strip(),int(p[1].strip())
@@ -2176,6 +2332,44 @@ async def mesaj_handler_v2(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ══════════════════════════════════════════════════════════════
 #  MAIN
 # ══════════════════════════════════════════════════════════════
+
+async def hbonus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    c = cfg()
+    if not c["bakiye_aktif"]: return
+    uid = str(update.effective_user.id); isim = update.effective_user.first_name
+    hkey = datetime.now().strftime("%Y-W%W")
+    if c.get("haftalik_bonus_al",{}).get(uid,"") == hkey:
+        return await update.message.reply_text("Bu hafta haftalik bonusunu aldin! Pazartesi tekrar gel.")
+    haftalik = c.get("haftalik_bonus", 500)
+    yeni = add_puan(c, uid, isim, haftalik)
+    c.setdefault("haftalik_bonus_al",{})[uid] = hkey; save(c)
+    sev, _ = hesapla_seviye(c, yeni)
+    await update.message.reply_text(f"Haftalik Bonus!\n\n+{haftalik} puan!\nSeviye {sev} | {yeni:,} puan")
+
+async def seviye_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    c = cfg()
+    esikler = c.get("seviye_esikleri",{})
+    uid = str(update.effective_user.id)
+    b = get_bakiye(c, uid)
+    sev, _ = hesapla_seviye(c, b["puan"])
+    satirlar = []
+    for s,esik in sorted(esikler.items(), key=lambda x: int(x[0])):
+        isaret = ">>>" if int(s)==sev else "   "
+        satirlar.append(f"{isaret} Seviye {s}: {int(esik):,} puan")
+    await update.message.reply_text(
+        f"<b>Seviye Tablosu</b>\n\nBakiyen: {b['puan']:,} puan | Seviye {sev}\n\n"
+        + "\n".join(satirlar), parse_mode="HTML")
+
+async def carpan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    c = cfg()
+    if not context.args:
+        return await update.message.reply_text(f"Puan Carpani: {c.get('puan_carpan',1.0)}x\n\nKullanim: /carpan [sayi]\nOrnek: /carpan 2.0 (cift puan)")
+    try:
+        p = float(context.args[0]); c["puan_carpan"] = p; save(c)
+        await update.message.reply_text(f"Puan carpani: {p}x olarak ayarlandi!")
+    except: await update.message.reply_text("Sayi gir. Ornek: /carpan 2.0")
+
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
@@ -2206,6 +2400,9 @@ def main():
     # Kullanıcı / Ekonomi
     app.add_handler(CommandHandler("bakiye",  bakiye_cmd))
     app.add_handler(CommandHandler("bonus",   bonus_cmd))
+    app.add_handler(CommandHandler("hbonus",  hbonus_cmd))
+    app.add_handler(CommandHandler("seviye",  seviye_cmd))
+    app.add_handler(CommandHandler("carpan",  carpan_cmd))
     app.add_handler(CommandHandler("transfer",transfer_cmd))
     app.add_handler(CommandHandler("top",     top_cmd))
     app.add_handler(CommandHandler("ref",     ref_cmd))
