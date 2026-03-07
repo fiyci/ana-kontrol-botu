@@ -1100,57 +1100,6 @@ async def butonsil_cmd(update, context):
     idx=int(context.args[0])-1; b=c.get("join_butonlar",[])
     if 0<=idx<len(b): b.pop(idx); c["join_butonlar"]=b; save(c); await update.message.reply_text("🗑 Silindi!")
 
-def main():
-    app=Application.builder().token(BOT_TOKEN).build()
-    # Admin
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("iptal", iptal))
-    app.add_handler(CommandHandler("otosil", otosil_cmd))
-    app.add_handler(CommandHandler("emojisil", emojisil_cmd))
-    app.add_handler(CommandHandler("butonsil", butonsil_cmd))
-    app.add_handler(CommandHandler("onayla", onayla_cmd))
-    app.add_handler(CommandHandler("destek", destek_cmd))
-    app.add_handler(CommandHandler("cevap", cevap_cmd))
-    app.add_handler(CommandHandler("yasakekle", yasakekle_cmd))
-    app.add_handler(CommandHandler("yasaksil", yasaksil_cmd))
-    app.add_handler(CommandHandler("anket", anket_cmd))
-    # Moderasyon
-    app.add_handler(CommandHandler("warn", warn_cmd))
-    app.add_handler(CommandHandler("ban", ban_cmd))
-    app.add_handler(CommandHandler("kick", kick_cmd))
-    app.add_handler(CommandHandler("mute", mute_cmd))
-    app.add_handler(CommandHandler("unmute", unmute_cmd))
-    app.add_handler(CommandHandler("kurallar", kurallar_cmd))
-    # Kullanıcı
-    app.add_handler(CommandHandler("bakiye", bakiye_cmd))
-    app.add_handler(CommandHandler("bonus", bonus_cmd))
-    app.add_handler(CommandHandler("transfer", transfer_cmd))
-    app.add_handler(CommandHandler("top", top_cmd))
-    app.add_handler(CommandHandler("ref", ref_cmd))
-    app.add_handler(CommandHandler("uyeol", uyeol_cmd))
-    # Casino
-    app.add_handler(CommandHandler("zar", zar_cmd))
-    app.add_handler(CommandHandler("tura", tura_cmd))
-    app.add_handler(CommandHandler("slot", slot_cmd))
-    app.add_handler(CommandHandler("rulet", rulet_cmd))
-    # Kripto
-    app.add_handler(CommandHandler("kripto", kripto_cmd))
-    app.add_handler(CommandHandler("btc", btc_cmd))
-    app.add_handler(CommandHandler("eth", eth_cmd))
-    app.add_handler(CommandHandler("ton", ton_cmd))
-    # Handlers
-    app.add_handler(CallbackQueryHandler(cb))
-    app.add_handler(ChatJoinRequestHandler(join_handler))
-    app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, yeni_uye))
-    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, mesaj_handler))
-    app.job_queue.run_repeating(oto_job, interval=3600, first=60)
-    app.job_queue.run_repeating(rss_job, interval=3600, first=120)
-    print("🚀 TG Suite Pro v5.0 başlatıldı!")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
-
-if __name__ == "__main__":
-    main()
-
 # ═══════════════════════════════════════════════════════════════
 #  YENİ OYUNLAR + ADMİN YETKİ SİSTEMİ — v5.1 EK MODÜL
 # ═══════════════════════════════════════════════════════════════
@@ -1659,121 +1608,16 @@ async def cb_v2(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.answer()
         c = cfg()
         await q.edit_message_text(
-            f"🎮 <b>Casino Oyunları</b>\n\n"
-            f"Durum: {'🟢 Aktif' if c['casino_aktif'] else '🔴 Pasif'}\n\n"
-            f"<b>Mevcut Oyunlar:</b>\n"
-            f"🎲 /zar — Zar at (2x)\n"
-            f"🪙 /tura — Yazı tura (2x)\n"
-            f"🎰 /slot — Slot makinesi (10x jackpot)\n"
-            f"🎡 /rulet — Rulet (35x)\n"
-            f"💣 /mines — Mayın tarlası\n"
-            f"🎣 /balik — Balık avı\n"
-            f"🔢 /tahmin — Sayı tahmin (8x)\n"
-            f"🃏 /kart — Kart oyunu\n"
-            f"📊 /ya — Yüksek/Alçak\n"
-            f"🎱 /tombala — Tombala\n"
-            f"⚔️ /savas — Kullanıcı savaşı\n"
-            f"🎁 /hediye — Hediye kutusu",
+            f"🎮 <b>Casino Oyunları</b>\n\nDurum: {'🟢 Aktif' if c['casino_aktif'] else '🔴 Pasif'}\n\n"
+            "🎲 /zar  🪙 /tura  🎰 /slot  🎡 /rulet\n"
+            "💣 /mines  🎣 /balik  🔢 /tahmin  🃏 /kart\n"
+            "📊 /ya  🎱 /tombala  ⚔️ /savas  🎁 /hediye\n"
+            "🎳 /bowling  🎯 /dart  🏀 /basketbol  ⚽ /penalti",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔴 Kapat" if c["casino_aktif"] else "🟢 Aç", callback_data="casino_toggle")],
-                [InlineKeyboardButton("💰 Bahis Limitleri", callback_data="casino_min")],
                 [InlineKeyboardButton("🔙 Geri", callback_data="ana")],
             ]))
-
-    else:
-        await _orijinal_cb(update, context)
-
-# ── MESAJ HANDLER EKLEMESİ ──────────────────────────────────────
-_orijinal_mesaj = mesaj_handler
-
-async def mesaj_handler_v2(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    bekle = context.user_data.get("bekle")
-    if bekle == "yadmin_ekle" and update.message and update.message.text:
-        if is_admin(update.effective_user.id):
-            try:
-                parcalar = update.message.text.strip().split()
-                uid2, sev = int(parcalar[0]), int(parcalar[1])
-                c = cfg()
-                if uid2 not in c["adminler"]: c["adminler"].append(uid2)
-                if "adminler_seviye" not in c: c["adminler_seviye"] = {}
-                c["adminler_seviye"][str(uid2)] = sev
-                save(c)
-                context.user_data["bekle"] = None
-                seviye_isim = {3:"Süper Admin",2:"Moderatör",1:"Yardımcı"}
-                await update.message.reply_text(
-                    f"✅ Admin eklendi!\nID: {uid2}\nSeviye: {seviye_isim.get(sev,'?')}", reply_markup=ana_kb())
-            except:
-                await update.message.reply_text("❌ Format: <code>123456789 2</code>", parse_mode="HTML")
-            return
-    await _orijinal_mesaj(update, context)
-
-# ── MAIN'İ GÜNCELLE ─────────────────────────────────────────────
-def main():
-    app = Application.builder().token(BOT_TOKEN).build()
-    # Admin
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("iptal", iptal))
-    app.add_handler(CommandHandler("otosil", otosil_cmd))
-    app.add_handler(CommandHandler("emojisil", emojisil_cmd))
-    app.add_handler(CommandHandler("butonsil", butonsil_cmd))
-    app.add_handler(CommandHandler("onayla", onayla_cmd))
-    app.add_handler(CommandHandler("destek", destek_cmd))
-    app.add_handler(CommandHandler("cevap", cevap_cmd))
-    app.add_handler(CommandHandler("yasakekle", yasakekle_cmd))
-    app.add_handler(CommandHandler("yasaksil", yasaksil_cmd))
-    app.add_handler(CommandHandler("anket", anket_cmd))
-    # Moderasyon
-    app.add_handler(CommandHandler("warn", warn_cmd))
-    app.add_handler(CommandHandler("ban", ban_cmd))
-    app.add_handler(CommandHandler("kick", kick_cmd))
-    app.add_handler(CommandHandler("mute", mute_cmd))
-    app.add_handler(CommandHandler("unmute", unmute_cmd))
-    app.add_handler(CommandHandler("kurallar", kurallar_cmd))
-    # Kullanıcı
-    app.add_handler(CommandHandler("bakiye", bakiye_cmd))
-    app.add_handler(CommandHandler("bonus", bonus_cmd))
-    app.add_handler(CommandHandler("transfer", transfer_cmd))
-    app.add_handler(CommandHandler("top", top_cmd))
-    app.add_handler(CommandHandler("ref", ref_cmd))
-    app.add_handler(CommandHandler("uyeol", uyeol_cmd))
-    # Casino — Temel
-    app.add_handler(CommandHandler("zar", zar_cmd))
-    app.add_handler(CommandHandler("tura", tura_cmd))
-    app.add_handler(CommandHandler("slot", slot_cmd))
-    app.add_handler(CommandHandler("rulet", rulet_cmd))
-    # Casino — Yeni
-    app.add_handler(CommandHandler("mines", mines_cmd))
-    app.add_handler(CommandHandler("balik", balik_cmd))
-    app.add_handler(CommandHandler("tahmin", tahmin_cmd))
-    app.add_handler(CommandHandler("kart", kart_cmd))
-    app.add_handler(CommandHandler("ya", yuksek_alcak_cmd))
-    app.add_handler(CommandHandler("tombala", tombala_cmd))
-    app.add_handler(CommandHandler("savas", savas_cmd))
-    app.add_handler(CommandHandler("hediye", hediye_cmd))
-    # Kripto
-    app.add_handler(CommandHandler("kripto", kripto_cmd))
-    app.add_handler(CommandHandler("btc", btc_cmd))
-    app.add_handler(CommandHandler("eth", eth_cmd))
-    app.add_handler(CommandHandler("ton", ton_cmd))
-    # Handlers (v2)
-    app.add_handler(CallbackQueryHandler(cb_v2))
-    app.add_handler(ChatJoinRequestHandler(join_handler))
-    app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, yeni_uye))
-    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, mesaj_handler_v2))
-    app.job_queue.run_repeating(oto_job, interval=3600, first=60)
-    app.job_queue.run_repeating(rss_job, interval=3600, first=120)
-    print("🚀 TG Suite Pro v5.1 başlatıldı!")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
-
-if __name__ == "__main__":
-    main()
-
-# ═══════════════════════════════════════════════════════════════
-#  v5.2 — BOWLING, DART, YENİ OYUNLAR + PUAN KAZANMA SİSTEMİ
-# ═══════════════════════════════════════════════════════════════
-
-# ── BOWLING ─────────────────────────────────────────────────────
 async def bowling_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """🎳 Bowling — 10 pin, kaç tanesini devirebilirsin?"""
     c = cfg()
