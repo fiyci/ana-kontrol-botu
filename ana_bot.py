@@ -4595,6 +4595,33 @@ async def kazan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML")
 
 
+async def oto_job(context):
+    c=cfg()
+    if not c.get("oto_aktif") or not c.get("oto_mesajlar") or not c.get("kanallar"): return
+    mesaj=random.choice(c["oto_mesajlar"])
+    for k in c["kanallar"]:
+        try:
+            kid = k["id"] if isinstance(k, dict) else k.split("|")[0].strip()
+            await _gonder(context.bot, kid, mesaj, c.get("oto_medya_tip","yok"), c.get("oto_medya_id",""))
+            c.setdefault("stats",{})["oto"] = c.get("stats",{}).get("oto",0) + 1
+        except Exception as e: logger.error(f"Oto: {e}")
+    save(c)
+
+async def rss_job(context):
+    c=cfg()
+    if not c.get("rss_aktif") or not c.get("rss_url") or not c.get("rss_kanal"): return
+    try:
+        import feedparser
+        feed=feedparser.parse(c["rss_url"])
+        if not feed.entries: return
+        son=feed.entries[0]; link=son.get("link","")
+        if link==c.get("rss_son_link"): return
+        baslik=son.get("title","Yeni"); ozet=son.get("summary","")[:300]
+        await context.bot.send_message(c["rss_kanal"], f"📰 <b>{baslik}</b>\n\n{ozet}\n\n🔗 {link}", parse_mode="HTML")
+        c["rss_son_link"]=link; save(c)
+    except Exception as e: logger.error(f"RSS: {e}")
+
+
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
