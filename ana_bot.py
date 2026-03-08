@@ -4,7 +4,7 @@
 ║  Casino + Moderasyon + Topluluk + Yönetim                       ║
 ╚══════════════════════════════════════════════════════════════════╝
 """
-import logging, random, json, os, asyncio
+import logging, random, json, os, asyncio, time as _time
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Poll, BotCommand
 from telegram.ext import (
