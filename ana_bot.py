@@ -6,7 +6,7 @@
 """
 import logging, random, json, os, asyncio
 from datetime import datetime, timedelta
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Poll
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Poll, BotCommand
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     MessageHandler, ChatJoinRequestHandler, ContextTypes, filters
@@ -2248,6 +2248,148 @@ async def mesaj_handler_v2(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "❌ Hatalı format!\n\nDoğru: <code>123456789 2</code>",
                 parse_mode="HTML")
         return
+
+
+    # ── Config state handler'ları (cb_v2 panelinden gelen bekle state'leri) ──
+    if bekle and is_admin(uid):
+        metin_in = update.message.text.strip() if update.message.text else ""
+        c = cfg()
+        handled = True
+
+        if bekle == "rss_url":
+            if not metin_in.startswith("http"):
+                await auto_reply(update, "❌ Geçerli bir URL gir (http ile başlamalı)")
+            else:
+                c["rss_url"] = metin_in
+                save(c); context.user_data["bekle"] = None
+                await update.message.reply_text("✅ RSS URL kaydedildi!")
+
+        elif bekle == "marka_isim":
+            c["marka_isim"] = metin_in
+            save(c); context.user_data["bekle"] = None
+            await update.message.reply_text(f"✅ Bot adı: <b>{metin_in}</b>", parse_mode="HTML")
+
+        elif bekle == "kurallar":
+            c["kurallar"] = metin_in
+            save(c); context.user_data["bekle"] = None
+            await update.message.reply_text("✅ Kurallar güncellendi!")
+
+        elif bekle == "join_mesaj":
+            c["join_mesaj"] = metin_in
+            save(c); context.user_data["bekle"] = None
+            await update.message.reply_text("✅ Karşılama mesajı güncellendi!")
+
+        elif bekle == "oto_mesaj":
+            c.setdefault("oto_mesajlar", []).append(metin_in)
+            save(c); context.user_data["bekle"] = None
+            await update.message.reply_text(f"✅ Oto mesaj eklendi! (Toplam: {len(c['oto_mesajlar'])})")
+
+        elif bekle == "emoji_kural":
+            c.setdefault("emoji_kurallar", []).append(metin_in)
+            save(c); context.user_data["bekle"] = None
+            await update.message.reply_text(f"✅ Emoji kuralı eklendi: {metin_in}")
+
+        elif bekle == "kanal_ekle":
+            # Format: @kanal veya -100xxx|İsim
+            if not (metin_in.startswith("@") or metin_in.startswith("-100")):
+                await auto_reply(update, "❌ @kanal_adi veya kanal ID yazmalısın")
+            else:
+                c.setdefault("kanallar", []).append(metin_in)
+                save(c); context.user_data["bekle"] = None
+                await update.message.reply_text(f"✅ Kanal eklendi: {metin_in}")
+
+        elif bekle == "admin_ekle":
+            try:
+                new_uid = int(metin_in.replace("@",""))
+                if new_uid not in c.get("adminler", []):
+                    c.setdefault("adminler", []).append(new_uid)
+                save(c); context.user_data["bekle"] = None
+                await update.message.reply_text(f"✅ Admin eklendi: <code>{new_uid}</code>", parse_mode="HTML")
+            except:
+                await auto_reply(update, "❌ Geçerli bir kullanıcı ID'si gir")
+
+        elif bekle == "oto_aralik":
+            try:
+                c["oto_aralik"] = int(metin_in) * 3600
+                save(c); context.user_data["bekle"] = None
+                await update.message.reply_text(f"✅ Oto mesaj aralığı: <b>{metin_in} saat</b>", parse_mode="HTML")
+            except: await auto_reply(update, "❌ Sayı gir! (saat cinsinden)")
+        elif bekle == "max_uyari":
+            try:
+                c["max_uyari"] = int(metin_in); save(c); context.user_data["bekle"] = None
+                await update.message.reply_text(f"✅ Maks uyarı: <b>{metin_in}</b>", parse_mode="HTML")
+            except: await auto_reply(update, "❌ Sayı gir!")
+        elif bekle == "ref_odul":
+            try:
+                c["ref_odul"] = int(metin_in); save(c); context.user_data["bekle"] = None
+                await update.message.reply_text(f"✅ Referans ödülü: <b>{metin_in} puan</b>", parse_mode="HTML")
+            except: await auto_reply(update, "❌ Sayı gir!")
+        elif bekle == "gunluk_bonus":
+            try:
+                c["gunluk_bonus"] = int(metin_in); save(c); context.user_data["bekle"] = None
+                await update.message.reply_text(f"✅ Günlük bonus: <b>{metin_in} puan</b>", parse_mode="HTML")
+            except: await auto_reply(update, "❌ Sayı gir!")
+        elif bekle == "haftalik_bonus":
+            try:
+                c["haftalik_bonus"] = int(metin_in); save(c); context.user_data["bekle"] = None
+                await update.message.reply_text(f"✅ Haftalık bonus: <b>{metin_in} puan</b>", parse_mode="HTML")
+            except: await auto_reply(update, "❌ Sayı gir!")
+        elif bekle == "vip_ayar":
+            try:
+                c["vip_fiyat"] = int(metin_in); save(c); context.user_data["bekle"] = None
+                await update.message.reply_text(f"✅ VIP fiyatı: <b>{metin_in} puan</b>", parse_mode="HTML")
+            except: await auto_reply(update, "❌ Sayı gir!")
+        elif bekle == "aktiflik_puan":
+            try:
+                c["aktiflik_puan"] = int(metin_in); save(c); context.user_data["bekle"] = None
+                await update.message.reply_text(f"✅ Aktiflik puanı: <b>{metin_in}</b>", parse_mode="HTML")
+            except: await auto_reply(update, "❌ Sayı gir!")
+        elif bekle == "streak_ayar":
+            try:
+                c["streak_odul"] = int(metin_in); save(c); context.user_data["bekle"] = None
+                await update.message.reply_text(f"✅ Streak ödülü: <b>{metin_in} puan</b>", parse_mode="HTML")
+            except: await auto_reply(update, "❌ Sayı gir!")
+        elif bekle == "uyelik_fiyat":
+            try:
+                c["uyelik_fiyat"] = int(metin_in); save(c); context.user_data["bekle"] = None
+                await update.message.reply_text(f"✅ Üyelik fiyatı: <b>{metin_in} puan</b>", parse_mode="HTML")
+            except: await auto_reply(update, "❌ Sayı gir!")
+        elif bekle == "captcha_sure":
+            try:
+                c["captcha_sure"] = int(metin_in); save(c); context.user_data["bekle"] = None
+                await update.message.reply_text(f"✅ Captcha süresi: <b>{metin_in} sn</b>", parse_mode="HTML")
+            except: await auto_reply(update, "❌ Sayı gir!")
+        elif bekle in ("bakiye_ver", "uyelik_cuzdan"):
+            try:
+                parcalar = metin_in.split()
+                uid2, miktar = str(parcalar[0]), int(parcalar[1])
+                isim2 = c.get("bakiyeler",{}).get(uid2,{}).get("isim","?")
+                add_puan(c, uid2, isim2, miktar)
+                save(c); context.user_data["bekle"] = None
+                await update.message.reply_text(f"✅ {isim2} +{miktar} puan", parse_mode="HTML")
+            except: await auto_reply(update, "❌ Format: user_id miktar")
+        elif bekle in ("join_foto", "join_video", "oto_foto", "oto_video", "join_buton"):
+            # Medya dosyası bekleniyor — text geldi
+            await auto_reply(update, "❌ Lütfen bir dosya/fotoğraf/video gönder!")
+
+        elif bekle == "puan_carpan":
+            try:
+                c["casino_carpan"] = float(metin_in)
+                save(c); context.user_data["bekle"] = None
+                await update.message.reply_text(f"✅ Casino çarpanı: <b>{c['casino_carpan']}</b>", parse_mode="HTML")
+            except:
+                await auto_reply(update, "❌ Sayısal değer gir! (örn: 1.5)")
+
+        elif bekle in ("join_foto", "join_video", "oto_foto", "oto_video", "uyelik_cuzdan", "join_buton", "bakiye_ver"):
+            # Bu state'ler özel medya/config gerektiriyor — sessizce temizle
+            context.user_data["bekle"] = None
+            handled = False  # normal akışa devam et
+
+        else:
+            handled = False
+
+        if handled:
+            return
 
     # ── Aktiflik puanı (dakikada 1 puan, spam önlemeli)
     c = cfg()
@@ -4869,6 +5011,8 @@ async def sponsorlar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ── /sponsor_panel — Admin yönetim paneli ────────────────────
 async def sponsor_panel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id): return
+    context.user_data.pop("sponsor_adim", None)
+    context.user_data.pop("sponsor_ekle", None)
     await _sponsor_panel_goster(update.message, cfg())
 
 
@@ -5185,6 +5329,382 @@ async def sponsor_bonus_duyur_cmd(update: Update, context: ContextTypes.DEFAULT_
     )
 
 
+
+# ════════════════════════════════════════════════════════════
+#  /commands — Tam komut listesi (admin için kategorili)
+#  /start    — Kategorili sekme sistemi (Diğerleri sekmesi)
+#  BotCommand — / yazınca autocomplete listesi
+# ════════════════════════════════════════════════════════════
+
+KOMUTLAR_KATEGORILER = {
+    "💰 Ekonomi & Oyun": [
+        ("/bakiye", "Bakiyeni DM'de gör"),
+        ("/puan", "Puan kartın"),
+        ("/bonus", "Günlük bonus al"),
+        ("/hbonus", "Haftalık bonus al"),
+        ("/kazan", "Mini görev (günlük 3 hak)"),
+        ("/gorev", "Görevleri gör"),
+        ("/market", "Marketten ürün al"),
+        ("/transfer @user miktar", "Puan gönder"),
+        ("/ref", "Referans kodunu gör"),
+        ("/top", "Liderlik tablosu"),
+        ("/profil", "Profil kartın"),
+        ("/seviye", "Seviye bilgisi"),
+        ("/vip", "VIP durumu"),
+    ],
+    "🎰 Casino Oyunları": [
+        ("/zar bahis", "Zar at"),
+        ("/tura bahis", "Yazı tura"),
+        ("/slot bahis", "Slot makinesi"),
+        ("/rulet bahis", "Rulet"),
+        ("/mines bahis", "Mayın tarlası"),
+        ("/balik bahis", "Balık avı 🎣"),
+        ("/kart bahis", "Şans kartı"),
+        ("/ya bahis", "Yüksek/Alçak"),
+        ("/tombala bahis", "Tombala"),
+        ("/savas bahis", "Kart savaşı"),
+        ("/bowling bahis", "Bowling 🎳"),
+        ("/dart bahis", "Dart 🎯"),
+        ("/basketbol bahis", "Basketbol"),
+        ("/penalti bahis", "Penalti"),
+        ("/hediye bahis", "Hediye kutusu"),
+        ("/bj bahis", "Kasayla BlackJack"),
+    ],
+    "🎮 Sosyal Oyunlar": [
+        ("/duello @user bahis", "1v1 düello"),
+        ("/jackpot", "Jackpot havuzunu gör"),
+        ("/quiz", "Bilgi yarışması"),
+        ("/kelime", "Kelime zinciri"),
+        ("/kazan", "Günlük mini görev"),
+    ],
+    "⚽ Futbol & Tahmin": [
+        ("/maclar", "Güncel maçları gör"),
+        ("/tahmin maç_id sonuç", "Maç tahmini yap"),
+        ("/tahminlerim", "Tahminlerin"),
+        ("/tahmin_top", "Tahmin liderleri"),
+        ("/ftahmin", "Hızlı tahmin"),
+        ("/kripto", "Kripto fiyatları"),
+        ("/btc", "Bitcoin fiyatı"),
+        ("/eth", "Ethereum fiyatı"),
+    ],
+    "📋 Genel": [
+        ("/sponsorlar", "Sponsor siteler"),
+        ("/rehber", "Rehber & yardım"),
+        ("/bildirim", "DM bildirimlerini aç/kapat"),
+        ("/kurallar", "Grup kuralları"),
+        ("/ping", "Bot hız testi"),
+        ("/istat", "Bot istatistikleri"),
+    ],
+}
+
+KOMUTLAR_ADMIN = {
+    "👑 Puan Yönetimi": [
+        ("/puanekle @user miktar sebep", "Üyeye puan ekle"),
+        ("/puansil @user miktar sebep", "Üyeden puan sil"),
+        ("/ver user_id miktar", "Puan ver (ID ile)"),
+        ("/al user_id miktar", "Puan al (ID ile)"),
+        ("/sifirla user_id", "Puanı sıfırla"),
+    ],
+    "🛡 Moderasyon": [
+        ("/warn @user sebep", "Uyarı ver"),
+        ("/ban @user", "Yasakla"),
+        ("/kick @user", "At"),
+        ("/mute @user süre", "Sustur"),
+        ("/unmute @user", "Sesi aç"),
+        ("/temizle N", "Son N mesajı sil"),
+        ("/yasakekle kelime", "Yasaklı kelime ekle"),
+        ("/yasaksil kelime", "Yasaklı kelime sil"),
+    ],
+    "📢 Yayın & Duyuru": [
+        ("/duyuru mesaj", "Kanallara duyuru"),
+        ("/etkinlik", "Etkinlik başlat"),
+        ("/anket soru|A|B|C", "Anket oluştur"),
+        ("/cekilis ödül N", "Çekiliş başlat"),
+        ("/dm mesaj", "Tüm üyelere DM"),
+    ],
+    "⚙️ Ayarlar": [
+        ("/sponsor_panel", "Sponsor yönet"),
+        ("/sponsor_bonus id", "Bonus bildirimi"),
+        ("/quiz N", "Bilgi yarışması başlat"),
+        ("/quiz_bitir", "Yarışmayı bitir"),
+        ("/quiz_ekle soru|cevap", "Soru ekle"),
+        ("/jackpot_cekilis", "Jackpot çekilişi"),
+        ("/mac_ekle", "Maç ekle"),
+        ("/mac_baslat id", "Maçı başlat"),
+        ("/mac_bitir id sonuç", "Maçı bitir"),
+        ("/futbol_api_key KEY", "API key ayarla"),
+    ],
+    "🔧 Sistem": [
+        ("/otosil", "Otomatik silme aç/kapat"),
+        ("/emojisil", "Emoji filtre aç/kapat"),
+        ("/onayla", "Join request onayla"),
+        ("/cevap ticket mesaj", "Ticket cevapla"),
+        ("/carpan değer", "Casino çarpan ayarla"),
+    ],
+}
+
+
+async def commands_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/commands — Tüm komutları kategorili göster"""
+    uid = update.effective_user.id
+    is_adm = is_admin(uid)
+
+    if is_adm and context.args and context.args[0] == "admin":
+        # Admin komutları
+        metin = "👑 <b>ADMİN KOMUTLARI</b>\n\n"
+        for kategori, komutlar in KOMUTLAR_ADMIN.items():
+            metin += f"{kategori}\n"
+            for cmd, aciklama in komutlar:
+                metin += f"  <code>{cmd}</code> — {aciklama}\n"
+            metin += "\n"
+        kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("👥 Üye Komutları", callback_data="cmds_uye_0")
+        ]])
+    else:
+        # Üye komutları — ilk kategori
+        kategori_listesi = list(KOMUTLAR_KATEGORILER.keys())
+        ilk = kategori_listesi[0]
+        komutlar = KOMUTLAR_KATEGORILER[ilk]
+        metin = f"📋 <b>KOMUTLAR</b>\n\n{ilk}\n"
+        for cmd, aciklama in komutlar:
+            metin += f"  <code>{cmd}</code> — {aciklama}\n"
+
+        butonlar = []
+        satir = []
+        for i, kat in enumerate(kategori_listesi):
+            kisa = kat.split(" ")[0]  # sadece emoji
+            satir.append(InlineKeyboardButton(kisa, callback_data=f"cmds_uye_{i}"))
+            if len(satir) == 3:
+                butonlar.append(satir)
+                satir = []
+        if satir:
+            butonlar.append(satir)
+        if is_adm:
+            butonlar.append([InlineKeyboardButton("👑 Admin Komutları", callback_data="cmds_admin_0")])
+        kb = InlineKeyboardMarkup(butonlar)
+
+    await update.message.reply_text(metin, parse_mode="HTML", reply_markup=kb)
+
+
+async def commands_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Komut listesi callback"""
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    uid = query.from_user.id
+    is_adm = is_admin(uid)
+
+    if data.startswith("cmds_uye_"):
+        idx = int(data.replace("cmds_uye_", ""))
+        kategori_listesi = list(KOMUTLAR_KATEGORILER.keys())
+        if idx >= len(kategori_listesi): idx = 0
+        kat = kategori_listesi[idx]
+        komutlar = KOMUTLAR_KATEGORILER[kat]
+        metin = f"📋 <b>KOMUTLAR</b>\n\n{kat}\n"
+        for cmd, aciklama in komutlar:
+            metin += f"  <code>{cmd}</code> — {aciklama}\n"
+
+        butonlar = []
+        satir = []
+        for i, k in enumerate(kategori_listesi):
+            kisa = k.split(" ")[0]
+            btn_text = f"[{kisa}]" if i == idx else kisa
+            satir.append(InlineKeyboardButton(btn_text, callback_data=f"cmds_uye_{i}"))
+            if len(satir) == 3:
+                butonlar.append(satir)
+                satir = []
+        if satir:
+            butonlar.append(satir)
+        if is_adm:
+            butonlar.append([InlineKeyboardButton("👑 Admin Komutları", callback_data="cmds_admin_0")])
+        await query.edit_message_text(metin, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(butonlar))
+
+    elif data.startswith("cmds_admin_") and is_adm:
+        idx = int(data.replace("cmds_admin_", ""))
+        kat_listesi = list(KOMUTLAR_ADMIN.keys())
+        if idx >= len(kat_listesi): idx = 0
+        kat = kat_listesi[idx]
+        komutlar = KOMUTLAR_ADMIN[kat]
+        metin = f"👑 <b>ADMİN KOMUTLARI</b>\n\n{kat}\n"
+        for cmd, aciklama in komutlar:
+            metin += f"  <code>{cmd}</code> — {aciklama}\n"
+
+        butonlar = []
+        satir = []
+        for i, k in enumerate(kat_listesi):
+            kisa = k.split(" ")[0]
+            btn_text = f"[{kisa}]" if i == idx else kisa
+            satir.append(InlineKeyboardButton(btn_text, callback_data=f"cmds_admin_{i}"))
+            if len(satir) == 3:
+                butonlar.append(satir)
+                satir = []
+        if satir:
+            butonlar.append(satir)
+        butonlar.append([InlineKeyboardButton("👥 Üye Komutları", callback_data="cmds_uye_0")])
+        await query.edit_message_text(metin, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(butonlar))
+
+
+
+# ════════════════════════════════════════════════════════════
+#  /start — Yeniden tasarım: Kategorili sekmeli ana panel
+# ════════════════════════════════════════════════════════════
+
+def _start_panel_kb(sekme="genel"):
+    """Sekmeye göre inline klavye"""
+
+    SEKMELER = {
+        "genel": [
+            [InlineKeyboardButton("🎰 Casino", callback_data="start_s_casino"),
+             InlineKeyboardButton("💰 Ekonomi", callback_data="start_s_ekonomi")],
+            [InlineKeyboardButton("⚽ Futbol", callback_data="start_s_futbol"),
+             InlineKeyboardButton("🎮 Oyunlar", callback_data="start_s_oyunlar")],
+            [InlineKeyboardButton("🎰 Sponsorlar", callback_data="start_s_sponsor"),
+             InlineKeyboardButton("📊 İstatistik", callback_data="start_s_istat")],
+            [InlineKeyboardButton("⚙️ Diğerleri", callback_data="start_s_diger")],
+        ],
+        "casino": [
+            [InlineKeyboardButton("🎲 Zar", callback_data="start_cmd_zar"),
+             InlineKeyboardButton("🪙 Tura", callback_data="start_cmd_tura"),
+             InlineKeyboardButton("🎰 Slot", callback_data="start_cmd_slot")],
+            [InlineKeyboardButton("🎯 Rulet", callback_data="start_cmd_rulet"),
+             InlineKeyboardButton("💣 Mines", callback_data="start_cmd_mines"),
+             InlineKeyboardButton("🃏 Kart", callback_data="start_cmd_kart")],
+            [InlineKeyboardButton("🎳 Bowling", callback_data="start_cmd_bowling"),
+             InlineKeyboardButton("🎯 Dart", callback_data="start_cmd_dart"),
+             InlineKeyboardButton("⚔️ Savaş", callback_data="start_cmd_savas")],
+            [InlineKeyboardButton("🎣 Balık", callback_data="start_cmd_balik"),
+             InlineKeyboardButton("🃏 BlackJack", callback_data="start_cmd_bj"),
+             InlineKeyboardButton("🎁 Hediye", callback_data="start_cmd_hediye")],
+            [InlineKeyboardButton("◀️ Geri", callback_data="start_s_genel")],
+        ],
+        "ekonomi": [
+            [InlineKeyboardButton("💳 Bakiye", callback_data="start_cmd_bakiye"),
+             InlineKeyboardButton("🎁 Bonus", callback_data="start_cmd_bonus")],
+            [InlineKeyboardButton("🎁 H.Bonus", callback_data="start_cmd_hbonus"),
+             InlineKeyboardButton("⭐ Seviye", callback_data="start_cmd_seviye")],
+            [InlineKeyboardButton("📋 Görev", callback_data="start_cmd_gorev"),
+             InlineKeyboardButton("🛒 Market", callback_data="start_cmd_market")],
+            [InlineKeyboardButton("🔄 Transfer", callback_data="start_cmd_transfer"),
+             InlineKeyboardButton("🏆 Lider", callback_data="start_cmd_top")],
+            [InlineKeyboardButton("💎 VIP", callback_data="start_cmd_vip"),
+             InlineKeyboardButton("🔗 Referans", callback_data="start_cmd_ref")],
+            [InlineKeyboardButton("◀️ Geri", callback_data="start_s_genel")],
+        ],
+        "futbol": [
+            [InlineKeyboardButton("⚽ Maçlar", callback_data="start_cmd_maclar"),
+             InlineKeyboardButton("🎯 Tahmin", callback_data="start_cmd_ftahmin")],
+            [InlineKeyboardButton("📋 Tahminlerim", callback_data="start_cmd_tahminlerim"),
+             InlineKeyboardButton("🏆 Tahmin Top", callback_data="start_cmd_tahmin_top")],
+            [InlineKeyboardButton("₿ BTC", callback_data="start_cmd_btc"),
+             InlineKeyboardButton("Ξ ETH", callback_data="start_cmd_eth"),
+             InlineKeyboardButton("💎 Kripto", callback_data="start_cmd_kripto")],
+            [InlineKeyboardButton("◀️ Geri", callback_data="start_s_genel")],
+        ],
+        "oyunlar": [
+            [InlineKeyboardButton("⚔️ Düello", callback_data="start_cmd_duello"),
+             InlineKeyboardButton("🎰 Jackpot", callback_data="start_cmd_jackpot")],
+            [InlineKeyboardButton("🧠 Quiz", callback_data="start_cmd_quiz"),
+             InlineKeyboardButton("🔤 Kelime", callback_data="start_cmd_kelime")],
+            [InlineKeyboardButton("🎯 Kazan", callback_data="start_cmd_kazan"),
+             InlineKeyboardButton("📖 Rehber", callback_data="start_cmd_rehber")],
+            [InlineKeyboardButton("◀️ Geri", callback_data="start_s_genel")],
+        ],
+        "sponsor": [
+            [InlineKeyboardButton("🎰 Sponsorları Gör", callback_data="start_cmd_sponsorlar")],
+            [InlineKeyboardButton("◀️ Geri", callback_data="start_s_genel")],
+        ],
+        "istat": [
+            [InlineKeyboardButton("📊 İstatistik", callback_data="start_cmd_istat"),
+             InlineKeyboardButton("🏓 Ping", callback_data="start_cmd_ping")],
+            [InlineKeyboardButton("👤 Profil", callback_data="start_cmd_profil"),
+             InlineKeyboardButton("🔔 Bildirim", callback_data="start_cmd_bildirim")],
+            [InlineKeyboardButton("◀️ Geri", callback_data="start_s_genel")],
+        ],
+        "diger": [
+            [InlineKeyboardButton("📜 Kurallar", callback_data="start_cmd_kurallar"),
+             InlineKeyboardButton("📖 Rehber", callback_data="start_cmd_rehber")],
+            [InlineKeyboardButton("🎫 Destek", callback_data="start_cmd_destek"),
+             InlineKeyboardButton("🔔 Bildirim", callback_data="start_cmd_bildirim")],
+            [InlineKeyboardButton("📋 Komutlar", callback_data="start_cmd_commands"),
+             InlineKeyboardButton("📩 DM Filtrele", callback_data="start_cmd_dm_filtre")],
+            [InlineKeyboardButton("◀️ Geri", callback_data="start_s_genel")],
+        ],
+    }
+    return InlineKeyboardMarkup(SEKMELER.get(sekme, SEKMELER["genel"]))
+
+
+def _start_metin(c, sekme="genel"):
+    isim = c.get("marka_isim", "SOGTİLLA")
+    kanal_say = len(c.get("kanallar", []))
+    uyeler = len(c.get("kullanicilar", {}))
+    bakiye_say = len(c.get("bakiyeler", {}))
+    oyun_say = c.get("toplam_oyun", 0)
+
+    sekmeler = {
+        "genel": (
+            f"⚡ <b>{isim}</b>\n\n"
+            f"📡 Kanal: {kanal_say}  👥 Üye: {uyeler}\n"
+            f"💳 Bakiye kayıtlı: {bakiye_say}  🎰 Oyun: {oyun_say}\n\n"
+            "Hangi bölüme gitmek istiyorsun? 👇"
+        ),
+        "casino":   f"🎰 <b>Casino Oyunları</b>\n\nBahis yap, kazan! Min bahis: {c.get('casino_min_bahis',10)} puan",
+        "ekonomi":  f"💰 <b>Ekonomi</b>\n\nBakiye, bonus, görev ve daha fazlası",
+        "futbol":   f"⚽ <b>Futbol & Kripto</b>\n\nMaç tahminleri ve kripto fiyatları",
+        "oyunlar":  f"🎮 <b>Sosyal Oyunlar</b>\n\nDüello, quiz, jackpot ve kelime zinciri",
+        "sponsor":  f"🎰 <b>Sponsor Siteler</b>\n\nGüvenilir partner siteleri",
+        "istat":    f"📊 <b>İstatistik & Profil</b>",
+        "diger":    f"⚙️ <b>Diğerleri</b>\n\nKurallar, rehber, destek ve daha fazlası",
+    }
+    return sekmeler.get(sekme, sekmeler["genel"])
+
+
+async def start_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start panel callback"""
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    c = cfg()
+
+    # Sekme geçişi
+    if data.startswith("start_s_"):
+        sekme = data.replace("start_s_", "")
+        await query.edit_message_text(
+            _start_metin(c, sekme),
+            parse_mode="HTML",
+            reply_markup=_start_panel_kb(sekme)
+        )
+
+    # Komut kısayolu — butona basınca komutu çalıştır
+    elif data.startswith("start_cmd_"):
+        cmd = data.replace("start_cmd_", "")
+        CMD_MAP = {
+            "bakiye": bakiye_cmd, "bonus": bonus_cmd, "hbonus": hbonus_cmd,
+            "seviye": seviye_cmd, "gorev": gorev_cmd, "market": market_cmd,
+            "profil": profil_cmd, "top": top_cmd, "vip": vip_cmd,
+            "ref": ref_cmd, "istat": istat_cmd, "ping": ping_cmd,
+            "sponsorlar": sponsorlar_cmd, "rehber": rehber_cmd,
+            "bildirim": bildirim_cmd, "kurallar": kurallar_cmd,
+            "maclar": maclar_cmd, "tahminlerim": tahminlerim_cmd,
+            "tahmin_top": tahmin_top_cmd, "ftahmin": ftahmin_cmd,
+            "btc": btc_cmd, "eth": eth_cmd, "kripto": kripto_cmd,
+            "jackpot": jackpot_cmd, "quiz": quiz_cmd,
+            "commands": commands_cmd,
+        }
+        fn = CMD_MAP.get(cmd)
+        if fn:
+            # update.message yok (callback), fake context ile çağır
+            class FakeUpdate:
+                effective_user = query.from_user
+                effective_chat = query.message.chat
+                message = query.message
+            try:
+                await fn(FakeUpdate(), context)
+            except:
+                await query.answer(f"/{cmd} komutunu kullan", show_alert=True)
+        else:
+            await query.answer(f"/{cmd} yazarak kullan", show_alert=True)
+
+
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
@@ -5268,9 +5788,13 @@ def main():
     app.add_handler(CommandHandler("puansil",       puansil_cmd))
     app.add_handler(CommandHandler("puan",          puan_cmd))
     # ── Sponsor ──
+    app.add_handler(CommandHandler("commands",         commands_cmd))
     app.add_handler(CommandHandler("sponsorlar",       sponsorlar_cmd))
     app.add_handler(CommandHandler("sponsor_panel",    sponsor_panel_cmd))
     app.add_handler(CommandHandler("sponsor_bonus",    sponsor_bonus_duyur_cmd))
+    app.add_handler(CallbackQueryHandler(commands_cb,  pattern="^cmds_"))
+    app.add_handler(CallbackQueryHandler(start_cb,     pattern="^start_s_"))
+    app.add_handler(CallbackQueryHandler(start_cb,     pattern="^start_cmd_"))
     app.add_handler(CallbackQueryHandler(sponsor_cb,   pattern="^spadmin_"))
     app.add_handler(CallbackQueryHandler(sponsor_cb,   pattern="^spduzenle_"))
     app.add_handler(CommandHandler("transfer",transfer_cmd))
@@ -5319,6 +5843,7 @@ def main():
     app.add_handler(CallbackQueryHandler(cb_v2))
     app.add_handler(ChatJoinRequestHandler(join_handler))
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, yeni_uye))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, sponsor_mesaj_handler))
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, mesaj_handler_v2))
 
     # Jobs
@@ -5331,6 +5856,26 @@ def main():
     app.job_queue.run_repeating(futbol_canli_job, interval=180, first=60)  # Her 3 dk
 
     print("🚀 SOGTİLLA v5.3 başlatıldı!")
+    # BotCommand autocomplete
+    cmds = [
+        BotCommand("start","Ana panel"), BotCommand("commands","Tüm komutlar"),
+        BotCommand("sponsorlar","Sponsorlar"), BotCommand("bakiye","Bakiye"),
+        BotCommand("bonus","Günlük bonus"), BotCommand("hbonus","Haftalık bonus"),
+        BotCommand("gorev","Görevler"), BotCommand("top","Liderlik"),
+        BotCommand("profil","Profil"), BotCommand("zar","Zar at"),
+        BotCommand("slot","Slot"), BotCommand("bj","BlackJack"),
+        BotCommand("duello","Düello"), BotCommand("jackpot","Jackpot"),
+        BotCommand("maclar","Maçlar"), BotCommand("btc","Bitcoin"),
+        BotCommand("kripto","Kripto"), BotCommand("ping","Ping"),
+        BotCommand("istat","İstatistik"), BotCommand("rehber","Rehber"),
+        BotCommand("transfer","Transfer"), BotCommand("vip","VIP"),
+        BotCommand("ref","Referans"), BotCommand("kazan","Kazan"),
+        BotCommand("kurallar","Kurallar"), BotCommand("destek","Destek"),
+    ]
+    try:
+        import asyncio as _aio2
+        _aio2.get_event_loop().run_until_complete(app.bot.set_my_commands(cmds))
+    except: pass
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
