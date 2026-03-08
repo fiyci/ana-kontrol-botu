@@ -22,7 +22,7 @@ DEFAULT = {
     # Lisans
     "lisans": {"aktif": True, "plan": "pro", "bitis": ""},
     "adminler": [],
-    "marka_isim": "TG Suite Pro",
+    "marka_isim": "SOGTİLLA",
     # Kanallar
     "kanallar": [],
     # Join bot
@@ -87,6 +87,7 @@ DEFAULT = {
     "transfer_min": 10,
     "puan_carpan": 1.0,
     # ── FUTBOL TAHMİN ──
+    "sponsorlar": {},
     "futbol_aktif": True,
     # ── QUIZ ──
     "quiz_aktif": True,
@@ -338,7 +339,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         b = get_bakiye(c, str(uid))
         sev = hesapla_seviye(c, b["puan"])
         bonus_alindi = c["gunluk_bonus_al"].get(str(uid),"") == bugun()
-        bot_isim = c.get("marka_isim","Bot")
+        bot_isim = c.get("marka_isim","SOGTİLLA")
         await update.message.reply_text(
             f"<b>Merhaba! {update.effective_user.first_name}</b>\n\n"
             f"Seviye {sev} | {b['puan']:,} puan\n"
@@ -348,7 +349,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         save(c)
         return
     await update.message.reply_text(
-        f"⚡ <b>{c.get('marka_isim','TG Suite Pro')}</b>\n\n"
+        f"⚡ <b>{c.get('marka_isim','SOGTİLLA')}</b>\n\n"
         f"📢 Kanal: {len(c['kanallar'])}  👥 Üye: {sum(1 for v in c['uyelikler'].values() if v.get('aktif'))}\n"
         f"💸 Bakiye kayıtlı: {len(c['bakiyeler'])}  🎰 Oyun: {c['stats']['casino_oyun']}",
         parse_mode="HTML", reply_markup=ana_kb(c)
@@ -357,7 +358,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def ana_goster(query, c=None):
     if c is None: c = cfg()
     await query.edit_message_text(
-        f"⚡ <b>{c.get('marka_isim','TG Suite Pro')}</b>\n\n"
+        f"⚡ <b>{c.get('marka_isim','SOGTİLLA')}</b>\n\n"
         f"📢 Kanal: {len(c['kanallar'])}  👥 Üye: {sum(1 for v in c['uyelikler'].values() if v.get('aktif'))}\n"
         f"💸 Bakiye kayıtlı: {len(c['bakiyeler'])}  🎰 Oyun: {c['stats']['casino_oyun']}",
         parse_mode="HTML", reply_markup=ana_kb(c)
@@ -731,7 +732,7 @@ async def cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # AYARLAR
     elif d == "m_ayar":
         admin_txt="\n".join([f"• <code>{a}</code>" for a in c["adminler"]])
-        await q.edit_message_text(f"⚙️ <b>Marka & Admin</b>\n\nBot adı: {c.get('marka_isim')}\nAdminler:\n{admin_txt}", parse_mode="HTML",
+        await q.edit_message_text(f"⚙️ <b>Marka & Admin</b>\n\nBot: {c.get('marka_isim','SOGTİLLA')}\nAdminler:\n{admin_txt}", parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("✏️ Bot Adı", callback_data="marka_isim"), InlineKeyboardButton("➕ Admin Ekle", callback_data="admin_ekle")],
                 [InlineKeyboardButton("➖ Admin Sil", callback_data="admin_sil_menu")],
@@ -4321,7 +4322,7 @@ async def istatistik_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             for i,(uid,b,isim) in enumerate(sirali)])
 
     await update.message.reply_text(
-        f"📊 <b>Bot İstatistikleri</b>\n"
+        f"📊 <b>SOGTİLLA İstatistikleri</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
         f"👥 Kayıtlı üye: <b>{toplam_uye}</b>\n"
         f"💰 Toplam puan: <b>{toplam_puan:,}</b>\n"
@@ -4817,6 +4818,373 @@ async def puan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
+
+
+# ════════════════════════════════════════════════════════════
+#  SPONSOR SİSTEMİ v2
+#  Admin: /sponsor_panel → inline adım adım ekleme
+#  Üye: /sponsorlar → "SİTE ADI | BONUS" butonlu liste
+# ════════════════════════════════════════════════════════════
+
+def _get_sponsorlar(c):
+    if "sponsorlar" not in c:
+        c["sponsorlar"] = {}
+    return c["sponsorlar"]
+
+
+def _sponsor_buton_yazi(s):
+    """Buton yazısı: PRADABET | 500 TL DENEME BONUSU"""
+    isim = s.get("isim","?").upper()
+    bonus = s.get("bonus","").upper()
+    if bonus:
+        return f"{isim} | {bonus}"
+    return isim
+
+
+# ── /sponsorlar — Üye görünümü ────────────────────────────────
+async def sponsorlar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    c = cfg()
+    sponsorlar = _get_sponsorlar(c)
+    aciklar = {k: v for k, v in sponsorlar.items() if v.get("acik", True)}
+
+    if not aciklar:
+        return await update.message.reply_text(
+            "⚠️ Şu an aktif sponsor yok.\nYakında eklenecek!")
+
+    butonlar = []
+    for sid, s in aciklar.items():
+        butonlar.append([InlineKeyboardButton(
+            _sponsor_buton_yazi(s),
+            url=s.get("link", "https://t.me/")
+        )])
+
+    await update.message.reply_text(
+        "🎰 <b>Sponsor Siteler</b>\n\n"
+        "Siteye gitmek için butona tıkla 👇",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(butonlar)
+    )
+
+
+# ── /sponsor_panel — Admin yönetim paneli ────────────────────
+async def sponsor_panel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    await _sponsor_panel_goster(update.message, cfg())
+
+
+async def _sponsor_panel_goster(msg_or_query, c, edit=False):
+    sponsorlar = _get_sponsorlar(c)
+    butonlar = []
+
+    for sid, s in sponsorlar.items():
+        durum = "🟢" if s.get("acik", True) else "🔴"
+        isim = s.get("isim", sid)
+        bonus_kisa = s.get("bonus","")[:20]
+        butonlar.append([
+            InlineKeyboardButton(
+                f"{durum} {isim} — {bonus_kisa}",
+                callback_data=f"spadmin_site_{sid}"
+            )
+        ])
+
+    butonlar.append([
+        InlineKeyboardButton("➕ Yeni Sponsor Ekle", callback_data="spadmin_ekle_1")
+    ])
+
+    metin = (
+        "<b>⚙️ Sponsor Paneli</b>\n\n"
+        + ("Henüz sponsor yok.\n\n" if not sponsorlar else
+           f"Toplam: {len(sponsorlar)} sponsor\n\n")
+        + "🟢 Açık | 🔴 Kapalı\n"
+        "Siteye tıkla → düzenle/sil/toggle"
+    )
+    kb = InlineKeyboardMarkup(butonlar)
+
+    if edit:
+        await msg_or_query.edit_message_text(metin, parse_mode="HTML", reply_markup=kb)
+    else:
+        await msg_or_query.reply_text(metin, parse_mode="HTML", reply_markup=kb)
+
+
+async def sponsor_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    c = cfg()
+    sponsorlar = _get_sponsorlar(c)
+    uid = query.from_user.id
+
+    # ── Site detay/yönetim ──
+    if data.startswith("spadmin_site_"):
+        if not is_admin(uid): return
+        sid = data.replace("spadmin_site_", "")
+        if sid not in sponsorlar: return
+        s = sponsorlar[sid]
+        durum_yazi = "🟢 Açık" if s.get("acik", True) else "🔴 Kapalı"
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton(
+                "🔴 Kapat" if s.get("acik", True) else "🟢 Aç",
+                callback_data=f"spadmin_toggle_{sid}"
+            )],
+            [InlineKeyboardButton("✏️ Düzenle", callback_data=f"spadmin_duzenle_{sid}")],
+            [InlineKeyboardButton("🗑 Sil", callback_data=f"spadmin_sil_onay_{sid}")],
+            [InlineKeyboardButton("◀️ Geri", callback_data="spadmin_panel")],
+        ])
+        kod_str = f"\n🎟 Kod: <code>{s['kod']}</code>" if s.get("kod") else ""
+        await query.edit_message_text(
+            f"<b>{s.get('isim','?')}</b>\n"
+            f"━━━━━━━━━━━━━━\n"
+            f"💰 {s.get('bonus','—')}\n"
+            f"🔗 {s.get('link','—')}"
+            f"{kod_str}\n"
+            f"📡 {durum_yazi}",
+            parse_mode="HTML", reply_markup=kb
+        )
+
+    # ── Toggle aç/kapat ──
+    elif data.startswith("spadmin_toggle_"):
+        if not is_admin(uid): return
+        sid = data.replace("spadmin_toggle_", "")
+        if sid in sponsorlar:
+            sponsorlar[sid]["acik"] = not sponsorlar[sid].get("acik", True)
+            c["sponsorlar"] = sponsorlar
+            save(c)
+        await _sponsor_panel_goster(query, c, edit=True)
+
+    # ── Silme onayı ──
+    elif data.startswith("spadmin_sil_onay_"):
+        if not is_admin(uid): return
+        sid = data.replace("spadmin_sil_onay_", "")
+        if sid not in sponsorlar: return
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Evet Sil", callback_data=f"spadmin_sil_evet_{sid}"),
+             InlineKeyboardButton("❌ Vazgeç", callback_data=f"spadmin_site_{sid}")],
+        ])
+        await query.edit_message_text(
+            f"🗑 <b>{sponsorlar[sid].get('isim','?')}</b> silinsin mi?",
+            parse_mode="HTML", reply_markup=kb
+        )
+
+    elif data.startswith("spadmin_sil_evet_"):
+        if not is_admin(uid): return
+        sid = data.replace("spadmin_sil_evet_", "")
+        isim = sponsorlar.get(sid, {}).get("isim", sid)
+        if sid in sponsorlar:
+            del sponsorlar[sid]
+            c["sponsorlar"] = sponsorlar
+            save(c)
+        await query.answer(f"🗑 {isim} silindi", show_alert=True)
+        await _sponsor_panel_goster(query, c, edit=True)
+
+    # ── Geri ──
+    elif data == "spadmin_panel":
+        if not is_admin(uid): return
+        await _sponsor_panel_goster(query, c, edit=True)
+
+    # ── YENİ SPONSOR EKLEME — 3 adım ──
+    # Adım 1: İsim sor
+    elif data == "spadmin_ekle_1":
+        if not is_admin(uid): return
+        context.user_data["sponsor_ekle"] = {}
+        await query.edit_message_text(
+            "➕ <b>Yeni Sponsor — Adım 1/3</b>\n\n"
+            "Sponsor sitenin <b>adını</b> yaz:\n"
+            "<i>Örnek: Pradabet</i>\n\n"
+            "/iptal ile vazgeç",
+            parse_mode="HTML"
+        )
+        context.user_data["sponsor_adim"] = "isim"
+
+    # ── Düzenleme ──
+    elif data.startswith("spadmin_duzenle_"):
+        if not is_admin(uid): return
+        sid = data.replace("spadmin_duzenle_", "")
+        context.user_data["sponsor_duzenle_id"] = sid
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📝 Adı değiştir",  callback_data=f"spduzenle_isim_{sid}")],
+            [InlineKeyboardButton("💰 Bonusu değiştir", callback_data=f"spduzenle_bonus_{sid}")],
+            [InlineKeyboardButton("🔗 Linki değiştir", callback_data=f"spduzenle_link_{sid}")],
+            [InlineKeyboardButton("🎟 Kodu değiştir",  callback_data=f"spduzenle_kod_{sid}")],
+            [InlineKeyboardButton("◀️ Geri",           callback_data=f"spadmin_site_{sid}")],
+        ])
+        await query.edit_message_text(
+            f"✏️ <b>{sponsorlar[sid].get('isim','?')}</b> — Ne değiştirmek istiyorsun?",
+            parse_mode="HTML", reply_markup=kb
+        )
+
+    elif data.startswith("spduzenle_"):
+        if not is_admin(uid): return
+        parcalar = data.split("_")
+        alan = parcalar[1]
+        sid = "_".join(parcalar[2:])
+        context.user_data["sponsor_duzenle_id"] = sid
+        context.user_data["sponsor_duzenle_alan"] = alan
+        alan_adi = {"isim":"Ad","bonus":"Bonus","link":"Link","kod":"Promo Kod"}.get(alan, alan)
+        await query.edit_message_text(
+            f"✏️ Yeni <b>{alan_adi}</b> değerini yaz:\n\n"
+            "/iptal ile vazgeç",
+            parse_mode="HTML"
+        )
+        context.user_data["sponsor_adim"] = "duzenle"
+
+    # ── Bonus bildirimi ──
+    elif data.startswith("spadmin_bonus_duyur_"):
+        if not is_admin(uid): return
+        sid = data.replace("spadmin_bonus_duyur_", "")
+        context.user_data["sponsor_bonus_sid"] = sid
+        context.user_data["sponsor_adim"] = "bonus_mesaj"
+        await query.edit_message_text(
+            f"📢 <b>{sponsorlar[sid].get('isim','?')}</b> için bonus mesajını yaz:\n\n"
+            "/iptal ile vazgeç",
+            parse_mode="HTML"
+        )
+
+
+async def sponsor_mesaj_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Sponsor ekleme/düzenleme adım handler"""
+    adim = context.user_data.get("sponsor_adim")
+    if not adim: return False
+    if not is_admin(update.effective_user.id): return False
+
+    metin = update.message.text.strip()
+    c = cfg()
+    sponsorlar = _get_sponsorlar(c)
+
+    # ── Yeni ekleme adımları ──
+    if adim == "isim":
+        context.user_data["sponsor_ekle"]["isim"] = metin
+        sid = metin.lower().replace(" ", "_")[:20]
+        context.user_data["sponsor_ekle"]["id"] = sid
+        context.user_data["sponsor_adim"] = "link"
+        await update.message.reply_text(
+            f"✅ Adı: <b>{metin}</b>\n\n"
+            "➕ <b>Adım 2/3</b> — Siteye giriş <b>linkini</b> yaz:\n"
+            "<i>Örnek: https://pradabet.com/giris</i>",
+            parse_mode="HTML"
+        )
+        return True
+
+    elif adim == "link":
+        if not metin.startswith("http"):
+            await update.message.reply_text("❌ Link http:// veya https:// ile başlamalı!")
+            return True
+        context.user_data["sponsor_ekle"]["link"] = metin
+        context.user_data["sponsor_adim"] = "bonus"
+        isim = context.user_data["sponsor_ekle"].get("isim","?")
+        await update.message.reply_text(
+            f"✅ Link: {metin}\n\n"
+            "➕ <b>Adım 3/3</b> — <b>Bonus bilgisini</b> yaz:\n"
+            "<i>Örnek: 500 TL DENEME BONUSU</i>\n\n"
+            "Yoksa <b>yok</b> yaz",
+            parse_mode="HTML"
+        )
+        return True
+
+    elif adim == "bonus":
+        bonus = "" if metin.lower() == "yok" else metin
+        data = context.user_data["sponsor_ekle"]
+        sid = data.get("id", data.get("isim","site").lower().replace(" ","_")[:20])
+        sponsorlar[sid] = {
+            "isim": data["isim"],
+            "link": data["link"],
+            "bonus": bonus,
+            "kod": "",
+            "acik": True,
+        }
+        c["sponsorlar"] = sponsorlar
+        save(c)
+        context.user_data["sponsor_adim"] = None
+        context.user_data["sponsor_ekle"] = {}
+
+        # Önizleme
+        onizleme = _sponsor_buton_yazi(sponsorlar[sid])
+        await update.message.reply_text(
+            f"✅ <b>Sponsor eklendi!</b>\n\n"
+            f"Buton görünümü:\n"
+            f"[ {onizleme} ]\n\n"
+            f"🔗 {data['link']}\n\n"
+            f"/sponsor_panel ile yönet",
+            parse_mode="HTML"
+        )
+        return True
+
+    # ── Düzenleme ──
+    elif adim == "duzenle":
+        sid = context.user_data.get("sponsor_duzenle_id")
+        alan = context.user_data.get("sponsor_duzenle_alan")
+        if sid and sid in sponsorlar and alan:
+            sponsorlar[sid][alan] = metin
+            c["sponsorlar"] = sponsorlar
+            save(c)
+            context.user_data["sponsor_adim"] = None
+            await update.message.reply_text(
+                f"✅ <b>{sponsorlar[sid]['isim']}</b> güncellendi!\n"
+                f"{alan}: <b>{metin}</b>\n\n"
+                f"Buton: [ {_sponsor_buton_yazi(sponsorlar[sid])} ]",
+                parse_mode="HTML"
+            )
+        return True
+
+    # ── Bonus duyuru mesajı ──
+    elif adim == "bonus_mesaj":
+        sid = context.user_data.get("sponsor_bonus_sid")
+        if sid and sid in sponsorlar:
+            s = sponsorlar[sid]
+            kod_str = f"\n🎟 Kod: <code>{s['kod']}</code>" if s.get("kod") else ""
+            bildirim = (
+                f"🚨 <b>YENİ BONUS — {s['isim'].upper()}</b>\n\n"
+                f"{metin}\n\n"
+                f"💰 {s.get('bonus','')}"
+                f"{kod_str}\n\n"
+                f"🔗 <a href='{s['link']}'>{s['isim']}'e Git →</a>"
+            )
+            gonderildi = 0
+            for kanal in c.get("kanallar", []):
+                kid = kanal["id"] if isinstance(kanal, dict) else kanal.split("|")[0].strip()
+                try:
+                    await context.bot.send_message(
+                        kid, bildirim, parse_mode="HTML",
+                        disable_web_page_preview=True)
+                    gonderildi += 1
+                except: pass
+            context.user_data["sponsor_adim"] = None
+            await update.message.reply_text(
+                f"✅ {gonderildi} kanala gönderildi!\n\n{bildirim}",
+                parse_mode="HTML", disable_web_page_preview=True
+            )
+        return True
+
+    return False
+
+
+async def sponsor_bonus_duyur_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/sponsor_bonus [id] — Kanala bonus bildirimi"""
+    if not is_admin(update.effective_user.id): return
+    c = cfg()
+    sponsorlar = _get_sponsorlar(c)
+    if not context.args:
+        # Liste göster
+        if not sponsorlar:
+            return await update.message.reply_text("Henüz sponsor yok.")
+        butonlar = [[InlineKeyboardButton(
+            s.get("isim","?"), callback_data=f"spadmin_bonus_duyur_{sid}"
+        )] for sid, s in sponsorlar.items()]
+        await update.message.reply_text(
+            "📢 Hangi site için bildirim gönderilsin?",
+            reply_markup=InlineKeyboardMarkup(butonlar)
+        )
+        return
+    sid = context.args[0].lower()
+    if sid not in sponsorlar:
+        return await update.message.reply_text(f"❌ '{sid}' bulunamadı!")
+    context.user_data["sponsor_bonus_sid"] = sid
+    context.user_data["sponsor_adim"] = "bonus_mesaj"
+    await update.message.reply_text(
+        f"📢 <b>{sponsorlar[sid]['isim']}</b> için bonus mesajını yaz:",
+        parse_mode="HTML"
+    )
+
+
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
@@ -4899,6 +5267,12 @@ def main():
     app.add_handler(CommandHandler("puanekle",      puanekle_cmd))
     app.add_handler(CommandHandler("puansil",       puansil_cmd))
     app.add_handler(CommandHandler("puan",          puan_cmd))
+    # ── Sponsor ──
+    app.add_handler(CommandHandler("sponsorlar",       sponsorlar_cmd))
+    app.add_handler(CommandHandler("sponsor_panel",    sponsor_panel_cmd))
+    app.add_handler(CommandHandler("sponsor_bonus",    sponsor_bonus_duyur_cmd))
+    app.add_handler(CallbackQueryHandler(sponsor_cb,   pattern="^spadmin_"))
+    app.add_handler(CallbackQueryHandler(sponsor_cb,   pattern="^spduzenle_"))
     app.add_handler(CommandHandler("transfer",transfer_cmd))
     app.add_handler(CommandHandler("top",     top_cmd))
     app.add_handler(CommandHandler("ref",     ref_cmd))
@@ -4936,7 +5310,7 @@ def main():
     app.add_handler(CommandHandler("ton",    ton_cmd))
 
     # Handlers
-    app.add_handler(CallbackQueryHandler(cekilis_cb,    pattern="^cekilis_"))
+    app.add_handler(CallbackQueryHandler(cekilis_cb,     pattern="^cekilis_"))
     app.add_handler(CallbackQueryHandler(duello_cb,     pattern="^duello_"))
     app.add_handler(CallbackQueryHandler(jackpot_cb,    pattern="^jackpot_"))
     app.add_handler(CallbackQueryHandler(kbj_cb,        pattern="^kbj_"))
@@ -4956,7 +5330,7 @@ def main():
     app.job_queue.run_daily(futbol_gunluk_cek_job, time=datetime.strptime("07:00","%H:%M").time())
     app.job_queue.run_repeating(futbol_canli_job, interval=180, first=60)  # Her 3 dk
 
-    print("🚀 TG Suite Pro v5.3 başlatıldı!")
+    print("🚀 SOGTİLLA v5.3 başlatıldı!")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
