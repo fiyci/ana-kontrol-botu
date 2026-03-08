@@ -128,6 +128,11 @@ DEFAULT = {
     "tickets": {},
     # ── İSTATİSTİK ──
     "buyume": {},
+    "casino_carpan": 2.0,
+    "streak_odul": 100,
+    "vip_fiyat": 10000,
+    "uyelik_fiyat": 500,
+    "son_aktiflik_puani": {},
     "stats": {"join": 0, "oto": 0, "emoji": 0, "uyelik_satis": 0, "casino_oyun": 0}
 }
 
@@ -850,6 +855,7 @@ async def transfer_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else: return await auto_reply(update, "Transfer için bir mesajı yanıtla!")
         gonderen["puan"]-=miktar
         hedef=get_bakiye(c, hedef_uid); hedef["puan"]+=miktar; hedef["isim"]=hedef_isim
+        if str(hedef_uid) == str(uid): return await auto_reply(update, "❌ Kendine transfer yapamazsın!")
         save(c)
         await update.message.reply_text(f"✅ Transfer tamamlandı!\n{isim} → {hedef_isim}: <b>{miktar:,} puan</b>", parse_mode="HTML")
     except: await dm_veya_grup(update, context, "❌ Hata! Kullanım: /transfer [miktar] (yanıtlayarak)", "💸 Transfer sonucu DM'ine gönderildi!")
@@ -3701,11 +3707,17 @@ async def futbol_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # 6. Etkinlik kazanma
 
 GOREVLER = {
-    "ilk_giris":   {"puan": 100, "aciklama": "🎉 İlk girişin", "tekrar": False},
-    "profil_foto": {"puan": 50,  "aciklama": "📸 Profil fotoğrafı", "tekrar": False},
-    "ilk_oyun":    {"puan": 30,  "aciklama": "🎮 İlk oyununu oynadın", "tekrar": False},
-    "gunluk_mesaj":{"puan": 5,   "aciklama": "💬 Günlük mesaj", "tekrar": True},
-    "haftalik":    {"puan": 200, "aciklama": "📅 Haftalık giriş", "tekrar": True},
+    "ilk_giris":    {"puan": 100, "aciklama": "🎉 İlk girişin",           "tekrar": False},
+    "profil_foto":  {"puan": 50,  "aciklama": "📸 Profil fotoğrafı",       "tekrar": False},
+    "ilk_oyun":     {"puan": 30,  "aciklama": "🎮 İlk oyununu oynadın",   "tekrar": False},
+    "ilk_kazanc":   {"puan": 75,  "aciklama": "🏆 İlk kazancın",          "tekrar": False},
+    "gunluk_mesaj": {"puan": 5,   "aciklama": "💬 Günlük mesaj at",       "tekrar": True},
+    "gunluk_oyun":  {"puan": 50,  "aciklama": "🎲 Günlük 3 oyun oyna",    "tekrar": True,  "hedef": 3},
+    "gunluk_bahis": {"puan": 25,  "aciklama": "💰 Günlük bahis yap",      "tekrar": True},
+    "haftalik":     {"puan": 200, "aciklama": "📅 Haftalık giriş serisi", "tekrar": True},
+    "transfer_yap": {"puan": 20,  "aciklama": "🔄 Transfer yap",          "tekrar": True},
+    "quiz_kazan":   {"puan": 30,  "aciklama": "🧠 Quiz sorusu bil",       "tekrar": True},
+    "referans_ver": {"puan": 150, "aciklama": "👥 Arkadaş davet et",      "tekrar": True},
 }
 
 async def iptal(update, context, *args): context.user_data["bekle"]=None; await update.message.reply_text("❌ İptal.")
