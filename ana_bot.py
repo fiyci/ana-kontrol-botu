@@ -137,6 +137,25 @@ DEFAULT = {
 }
 
 # ── CONFIG ──────────────────────────────────────────────────────
+def _normalize_kanallar(c):
+    """Eski string formatlı kanalları dict'e dönüştür"""
+    kanallar = c.get("kanallar", [])
+    yeni = []
+    degisti = False
+    for k in kanallar:
+        if isinstance(k, str):
+            yeni.append({"id": k, "isim": k})
+            degisti = True
+        elif isinstance(k, dict):
+            yeni.append(k)
+        else:
+            yeni.append({"id": str(k), "isim": str(k)})
+            degisti = True
+    if degisti:
+        c["kanallar"] = yeni
+        save(c)
+    return c
+
 def cfg():
     if os.path.exists(CONFIG):
         try:
@@ -626,7 +645,23 @@ async def cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton("🔙 Geri", callback_data="ana")],
             ])
         )
-    elif d=="join_toggle": c["join_aktif"]=not c["join_aktif"]; save(c); await cb(update,context)
+    elif d=="join_toggle":
+        c["join_aktif"] = not c.get("join_aktif", True)
+        save(c)
+        durum = "🟢 Açık" if c["join_aktif"] else "🔴 Kapalı"
+        await q.answer(f"Join mesajı {durum}!", show_alert=False)
+        # Paneli inline güncelle
+        await q.edit_message_text(
+            f"✉️ <b>Join Request Bot</b>\n\nDurum: {'🟢' if c['join_aktif'] else '🔴'}\nMedya: {c.get('join_medya_tip','yok')}\nButon: {len(c.get('join_butonlar',[]))}",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔴 Kapat" if c["join_aktif"] else "🟢 Aç", callback_data="join_toggle")],
+                [InlineKeyboardButton("✏️ Mesaj", callback_data="join_mesaj_duzenle"), InlineKeyboardButton("👁 Gör", callback_data="join_mesaj_gor")],
+                [InlineKeyboardButton("🖼 Foto Ekle", callback_data="join_foto_ekle"), InlineKeyboardButton("🎬 Video Ekle", callback_data="join_video_ekle")],
+                [InlineKeyboardButton("🔘 Buton Ekle", callback_data="join_buton_ekle"), InlineKeyboardButton("📋 Butonlar", callback_data="join_buton_gor")],
+                [InlineKeyboardButton("🗑 Medyayı Kaldır", callback_data="join_medya_kaldir")],
+                [InlineKeyboardButton("🔙 Geri", callback_data="ana")],
+            ]))
     elif d=="join_mesaj_gor": await q.edit_message_text(f"📝 Mesaj:\n\n{c['join_mesaj']}", parse_mode="HTML", reply_markup=geri_kb("m_join"))
     elif d=="join_mesaj_duzenle": await q.edit_message_text("✏️ Yeni mesaj yaz:\n<code>{first_name}</code>=isim\n\nİptal: /iptal", parse_mode="HTML", reply_markup=geri_kb("m_join")); context.user_data["bekle"]="join_mesaj"
     elif d=="join_foto_ekle": await q.edit_message_text("📸 Fotoğrafı gönder:", reply_markup=geri_kb("m_join")); context.user_data["bekle"]="join_foto"
@@ -703,12 +738,41 @@ async def cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton("🔗 URL Ayarla", callback_data="rss_url_ayarla"), InlineKeyboardButton("📢 Kanal Seç", callback_data="rss_kanal_sec")],
                 [InlineKeyboardButton("🔙 Geri", callback_data="ana")],
             ]))
-    elif d=="rss_toggle": c["rss_aktif"]=not c["rss_aktif"]; save(c); await cb(update,context)
+    elif d=="rss_toggle":
+        c["rss_aktif"] = not c.get("rss_aktif", False)
+        save(c)
+        durum = "🟢 Açık" if c["rss_aktif"] else "🔴 Kapalı"
+        await q.answer(f"RSS {durum}!", show_alert=False)
+        kanal_isim = "Seçilmedi"
+        rss_k = c.get("rss_kanal")
+        if rss_k:
+            for k in c.get("kanallar",[]):
+                kid = k["id"] if isinstance(k,dict) else k
+                kis = k["isim"] if isinstance(k,dict) else k
+                if kid == rss_k:
+                    kanal_isim = kis; break
+        await q.edit_message_text(
+            f"📰 <b>RSS Bot</b>\n\nDurum: {'🟢' if c['rss_aktif'] else '🔴'}\n"
+            f"URL: {c.get('rss_url') or '—'}\nKanal: {kanal_isim}",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔴 Kapat" if c["rss_aktif"] else "🟢 Aç", callback_data="rss_toggle")],
+                [InlineKeyboardButton("🔗 URL Ayarla", callback_data="rss_url_ayarla"),
+                 InlineKeyboardButton("📢 Kanal Seç", callback_data="rss_kanal_sec")],
+                [InlineKeyboardButton("🔙 Geri", callback_data="ana")],
+            ]))
     elif d=="rss_url_ayarla": await q.edit_message_text("RSS URL yaz:\n\nİptal: /iptal", reply_markup=geri_kb("m_rss")); context.user_data["bekle"]="rss_url"
     elif d=="rss_kanal_sec":
         if not c["kanallar"]: return await q.answer("❌ Kanal yok!", show_alert=True)
-        rows=[[InlineKeyboardButton(k["isim"],callback_data=f"rss_k_{i}")] for i,k in enumerate(c["kanallar"])]+[[InlineKeyboardButton("🔙",callback_data="m_rss")]]
-        await q.edit_message_text("Kanal seç:", reply_markup=InlineKeyboardMarkup(rows))
+        c = _normalize_kanallar(c)
+        if not c["kanallar"]:
+            return await q.answer("❌ Önce kanal ekle!", show_alert=True)
+        rows = []
+        for i, k in enumerate(c["kanallar"]):
+            isim = k["isim"] if isinstance(k, dict) else k
+            rows.append([InlineKeyboardButton(f"📢 {isim}", callback_data=f"rss_k_{i}")])
+        rows.append([InlineKeyboardButton("🔙 Geri", callback_data="m_rss")])
+        await q.edit_message_text("📢 Haberlerin gönderileceği kanalı seç:", reply_markup=InlineKeyboardMarkup(rows))
     elif d.startswith("rss_k_"):
         idx=int(d.split("_")[-1]); c["rss_kanal"]=c["kanallar"][idx]["id"]; save(c)
         await q.answer("✅ Seçildi!",show_alert=True); await cb(update,context)
@@ -2550,6 +2614,26 @@ async def cb_v2(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Geri", callback_data="m_admin_yetki")]]))
 
+    elif d.startswith("jr_onayla_"):
+        # join request onayla: jr_onayla_CHAT_ID_USER_ID
+        try:
+            parts = d.split("_")
+            chat_id_jr = int(parts[2])
+            user_id_jr = int(parts[3])
+            await context.bot.approve_chat_join_request(chat_id_jr, user_id_jr)
+            await q.edit_message_text(
+                "✅ Gruba katılım onaylandı! Hoş geldin!",
+                reply_markup=None
+            )
+            # Üyelik kaydı
+            c.setdefault("uyelikler", {}).setdefault(str(user_id_jr), {
+                "aktif": True, "giris": bugun(), "isim": q.from_user.first_name
+            })
+            save(c)
+        except Exception as e:
+            await q.answer(f"❌ Hata: {e}", show_alert=True)
+
+
     # ── Oyun menüsü
     elif d == "m_oyunlar":
         c = cfg()
@@ -2708,13 +2792,26 @@ async def mesaj_handler_v2(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"✅ Emoji kuralı eklendi: {metin_in}")
 
         elif bekle == "kanal_ekle":
-            # Format: @kanal veya -100xxx|İsim
-            if not (metin_in.startswith("@") or metin_in.startswith("-100")):
-                await auto_reply(update, "❌ @kanal_adi veya kanal ID yazmalısın")
+            # Format: @kanal veya -100xxx|İsim veya -100xxx
+            if not (metin_in.startswith("@") or metin_in.startswith("-100") or metin_in.lstrip("-").isdigit()):
+                await auto_reply(update, "❌ Format:\n• @kanal_adi\n• -1001234567|Kanal Adı\n• -1001234567")
             else:
-                c.setdefault("kanallar", []).append(metin_in)
+                # Dict formatında kaydet: {id, isim}
+                if "|" in metin_in:
+                    kanal_id, kanal_isim = metin_in.split("|", 1)
+                    kanal_id = kanal_id.strip(); kanal_isim = kanal_isim.strip()
+                elif metin_in.startswith("@"):
+                    kanal_id = metin_in; kanal_isim = metin_in
+                else:
+                    kanal_id = metin_in.strip(); kanal_isim = kanal_id
+                # Mevcut string formatındakileri de düzelt
+                kanallar = c.setdefault("kanallar", [])
+                # Zaten var mı?
+                ids = [k["id"] if isinstance(k, dict) else k for k in kanallar]
+                if kanal_id not in ids:
+                    kanallar.append({"id": kanal_id, "isim": kanal_isim})
                 save(c); context.user_data["bekle"] = None
-                await update.message.reply_text(f"✅ Kanal eklendi: {metin_in}")
+                await update.message.reply_text(f"✅ Kanal eklendi: <b>{kanal_isim}</b> (<code>{kanal_id}</code>)", parse_mode="HTML")
 
         elif bekle == "admin_ekle":
             # Eski sistem — uyumluluk için koru
@@ -4287,55 +4384,172 @@ async def yasaksil_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ANKET
 
 async def yeni_uye(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    c=cfg()
-    if not c["captcha_aktif"] or not update.message.new_chat_members: return
+    """Yeni üye girişi: join mesajı + captcha"""
+    c = cfg()
+    c = _normalize_kanallar(c)
+
+    if not update.message or not update.message.new_chat_members:
+        return
+
     for user in update.message.new_chat_members:
-        if user.is_bot: continue
-        a=random.randint(1,10); b2=random.randint(1,10)
-        c["captcha_bekleyenler"][str(user.id)]={"cevap":a+b2,"chat":update.effective_chat.id}; save(c)
-        await update.message.reply_text(f"👋 {user.first_name}!\n\n🔐 <b>{a} + {b2} = ?</b>\n\n⏱ {c['captcha_sure']} saniye", parse_mode="HTML")
-        context.job_queue.run_once(_captcha_timeout, c["captcha_sure"],
-            data={"user_id":user.id,"chat_id":update.effective_chat.id}, name=f"cap_{user.id}")
+        if user.is_bot:
+            continue
+
+        uid_str = str(user.id)
+        isim    = user.first_name or user.username or "Üye"
+        chat_id = update.effective_chat.id
+
+        # ── Üyelik kaydı
+        c.setdefault("uyelikler", {}).setdefault(uid_str, {
+            "aktif": True, "giris": bugun(), "isim": isim
+        })
 
 
-# ════════════════════════════════════════════════════════════════
-#  SOSYAL & TOPLU OYUNLAR
-#  1. BİLGİ YARIŞMASI (Quiz)
-#  2. DÜELLO (1v1)
-#  3. JACKPOT HAVUZU
-#  4. KASAYLA BLACKJACK
-# ════════════════════════════════════════════════════════════════
+async def join_request_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """ChatJoinRequest — Birisi gruba katılmak isteyince (join request açıksa)"""
+    c = cfg()
+    c = _normalize_kanallar(c)
+    if not c.get("join_aktif"):
+        return
 
-import asyncio as _asyncio
-import time as _time
+    req  = update.chat_join_request
+    user = req.from_user
+    isim = user.first_name or user.username or "Üye"
+    uid_str = str(user.id)
 
-# ── VARSAYILAN SORULAR ────────────────────────────────────────
-VARSAYILAN_SORULAR = [
-    {"s": "Türkiye'nin başkenti neresidir?", "c": ["Ankara","ankara"], "ip": "🏛"},
-    {"s": "Kaç tane gezegenimiz var?", "c": ["8","sekiz"], "ip": "🪐"},
-    {"s": "Suyun kimyasal formülü nedir?", "c": ["H2O","h2o"], "ip": "💧"},
-    {"s": "1 düzine kaç tanedir?", "c": ["12","on iki"], "ip": "🔢"},
-    {"s": "Hangi hayvan 'orman kralı' olarak bilinir?", "c": ["aslan","lion"], "ip": "🦁"},
-    {"s": "Dünya'nın en büyük okyanusu hangisidir?", "c": ["büyük okyanus","pasifik","pacific"], "ip": "🌊"},
-    {"s": "İnsan vücudunda kaç kemik vardır?", "c": ["206"], "ip": "🦴"},
-    {"s": "Güneş sistemimizdeki en büyük gezegen hangisidir?", "c": ["jüpiter","jupiter"], "ip": "🪐"},
-    {"s": "Elmanın düşmesi hangi bilim insanına esin kaynağı oldu?", "c": ["newton","isaac newton"], "ip": "🍎"},
-    {"s": "Bir yılda kaç ay vardır?", "c": ["12","on iki"], "ip": "📅"},
-    {"s": "Türkiye kaç kıtada yer alır?", "c": ["2","iki"], "ip": "🌍"},
-    {"s": "Hangi metal sıvı hâlde bulunur?", "c": ["cıva","civayı"], "ip": "⚗️"},
-    {"s": "Işığın hızı yaklaşık kaç km/s'dir?", "c": ["300000","300.000","299792"], "ip": "💡"},
-    {"s": "Piramitler hangi ülkededir?", "c": ["mısır","egypt"], "ip": "🔺"},
-    {"s": "Türkiye'nin para birimi nedir?", "c": ["türk lirası","lira","tl"], "ip": "💰"},
-    {"s": "Hangi ülke hem kıta hem ülkedir?", "c": ["avustralya","australia"], "ip": "🦘"},
-    {"s": "Bal yapan böcek hangisidir?", "c": ["arı","bee"], "ip": "🐝"},
-    {"s": "1 saatte kaç dakika vardır?", "c": ["60","altmış"], "ip": "⏰"},
-    {"s": "En hızlı kara hayvanı hangisidir?", "c": ["çita","cheetah"], "ip": "🐆"},
-    {"s": "Hangi vitamin güneş ışığından üretilir?", "c": ["d","d vitamini","vitamin d"], "ip": "☀️"},
-]
+    # Join mesajını DM olarak gönder
+    join_metin = c.get("join_mesaj", "")
+    if join_metin:
+        join_metin = join_metin.replace("{first_name}", isim)
+        join_metin = join_metin.replace("{username}", f"@{user.username}" if user.username else isim)
+        join_metin = join_metin.replace("{chat_title}", req.chat.title or "Grup")
+    else:
+        join_metin = (
+            f"👋 <b>Merhaba {isim}!</b>\n\n"
+            f"<b>{req.chat.title}</b> grubuna katılmak istiyorsun.\n\n"
+            f"Aşağıdaki butona basarak gruba katılabilirsin!"
+        )
 
-# ════════════════════════════════════════════════════════════
-# 1. BİLGİ YARIŞMASI
-# ════════════════════════════════════════════════════════════
+    join_butonlar = c.get("join_butonlar", [])
+    rows = []
+    for b in join_butonlar:
+        try:
+            rows.append([InlineKeyboardButton(b[0], url=b[1])])
+        except:
+            pass
+    # Onayla butonu ekle
+    rows.append([InlineKeyboardButton("✅ Gruba Katıl", callback_data=f"jr_onayla_{req.chat.id}_{user.id}")])
+    reply_markup = InlineKeyboardMarkup(rows)
+
+    medya_tip = c.get("join_medya_tip", "yok")
+    medya_id  = c.get("join_medya_id", "")
+
+    try:
+        if medya_tip == "foto" and medya_id:
+            await context.bot.send_photo(
+                user.id, photo=medya_id,
+                caption=join_metin, parse_mode="HTML",
+                reply_markup=reply_markup
+            )
+        elif medya_tip == "video" and medya_id:
+            await context.bot.send_video(
+                user.id, video=medya_id,
+                caption=join_metin, parse_mode="HTML",
+                reply_markup=reply_markup
+            )
+        else:
+            await context.bot.send_message(
+                user.id, join_metin,
+                parse_mode="HTML",
+                reply_markup=reply_markup
+            )
+    except Exception as e:
+        logger.warning(f"Join request DM gönderilemedi ({user.id}): {e}")
+        # DM gönderilemezse otomatik onayla
+        try:
+            await req.approve()
+        except:
+            pass
+
+        # ── Görev: İlk giriş
+        if gorev_tamamla(c, uid_str, isim, "ilk_giris"):
+            pass  # Sessizce kaydet
+
+        save(c)
+
+        # ── Captcha (join_aktif'ten bağımsız, kendi flag'i var)
+        if c.get("captcha_aktif"):
+            import random as _r
+            a = _r.randint(1, 10); b2 = _r.randint(1, 10)
+            c.setdefault("captcha_bekleyenler", {})[uid_str] = {
+                "cevap": a + b2, "chat": chat_id
+            }
+            save(c)
+            await update.message.reply_text(
+                f"👋 {isim}! Gruba hoş geldin!\n\n"
+                f"🔐 Doğrulama: <b>{a} + {b2} = ?</b>\n"
+                f"⏱ {c.get('captcha_sure', 60)} saniye içinde cevapla!",
+                parse_mode="HTML"
+            )
+            context.job_queue.run_once(
+                _captcha_timeout, c.get("captcha_sure", 60),
+                data={"user_id": user.id, "chat_id": chat_id},
+                name=f"cap_{user.id}"
+            )
+
+        # ── Join Mesajı
+        if c.get("join_aktif"):
+            join_metin = c.get("join_mesaj", "")
+            if join_metin:
+                # Değişken değiştirme
+                join_metin = join_metin.replace("{first_name}", isim)
+                join_metin = join_metin.replace("{username}", f"@{user.username}" if user.username else isim)
+                join_metin = join_metin.replace("{chat_title}", update.effective_chat.title or "Grup")
+            else:
+                join_metin = (
+                    f"👋 <b>Hoş geldin, {isim}!</b>\n\n"
+                    f"🤖 Bu gruba katıldın. Komutlar için /commands"
+                )
+
+            # Butonlar
+            join_butonlar = c.get("join_butonlar", [])
+            reply_markup = None
+            if join_butonlar:
+                rows = []
+                for b in join_butonlar:
+                    try:
+                        rows.append([InlineKeyboardButton(b[0], url=b[1])])
+                    except:
+                        pass
+                if rows:
+                    reply_markup = InlineKeyboardMarkup(rows)
+
+            # Medya ile mi düz metin mi?
+            medya_tip = c.get("join_medya_tip", "yok")
+            medya_id  = c.get("join_medya_id", "")
+
+            try:
+                if medya_tip == "foto" and medya_id:
+                    await context.bot.send_photo(
+                        chat_id, photo=medya_id,
+                        caption=join_metin, parse_mode="HTML",
+                        reply_markup=reply_markup
+                    )
+                elif medya_tip == "video" and medya_id:
+                    await context.bot.send_video(
+                        chat_id, video=medya_id,
+                        caption=join_metin, parse_mode="HTML",
+                        reply_markup=reply_markup
+                    )
+                else:
+                    await context.bot.send_message(
+                        chat_id, join_metin,
+                        parse_mode="HTML",
+                        reply_markup=reply_markup
+                    )
+            except Exception as e:
+                logger.warning(f"Join mesajı gönderilemedi: {e}")
+
 
 async def quiz_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin: /quiz [soru_sayısı] — Bilgi yarışması başlat"""
@@ -5309,7 +5523,21 @@ async def rss_job(context):
         son=feed.entries[0]; link=son.get("link","")
         if link==c.get("rss_son_link"): return
         baslik=son.get("title","Yeni"); ozet=son.get("summary","")[:300]
-        await context.bot.send_message(c["rss_kanal"], f"📰 <b>{baslik}</b>\n\n{ozet}\n\n🔗 {link}", parse_mode="HTML")
+        # rss_kanal string ID veya dict olabilir
+        rss_kanal_id = c["rss_kanal"]
+        if isinstance(rss_kanal_id, dict):
+            rss_kanal_id = rss_kanal_id.get("id", rss_kanal_id)
+        
+        # Telegram mesaj limiti için özeti kırp
+        if len(ozet) > 800:
+            ozet = ozet[:797] + "..."
+        
+        await context.bot.send_message(
+            rss_kanal_id,
+            f"📰 <b>{baslik}</b>\n\n{ozet}\n\n🔗 <a href=\"{link}\">Haberin tamamı</a>",
+            parse_mode="HTML",
+            disable_web_page_preview=False
+        )
         c["rss_son_link"]=link; save(c)
     except Exception as e: logger.error(f"RSS: {e}")
 
@@ -6396,6 +6624,7 @@ def main():
     app.add_handler(CallbackQueryHandler(cb_v2))
     app.add_handler(ChatJoinRequestHandler(join_handler))
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, yeni_uye))
+    app.add_handler(ChatJoinRequestHandler(join_request_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, sponsor_mesaj_handler))
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, mesaj_handler_v2))
 
