@@ -85,6 +85,17 @@ DEFAULT = {
     "vip_bonus_katsayi": 1.5,
     "transfer_min": 10,
     "puan_carpan": 1.0,
+    # ── FUTBOL TAHMİN ──
+    "futbol_aktif": True,
+    "futbol_api_key": "",          # api-football.com API key (ücretsiz 100/gün)
+    "futbol_maclar": {},           # {mac_id: {ev, deplasman, tarih, lig, skor, durum}}
+    "futbol_tahminler": {},        # {mac_id: {uid: "1"|"X"|"2"}}
+    "futbol_kazanc": {             # doğru tahmin ödülleri
+        "1X2": 100,                # maç sonucu tahmini
+        "skor": 300,               # tam skor tahmini
+        "galibiyet_serisi": 50,    # 3 üst üste doğru = ekstra
+    },
+    "futbol_tahmin_stats": {},     # {uid: {dogru, yanlis, toplam_puan}}
     # ── CASİNO ──
     "casino_aktif": True,
     "casino_min_bahis": 10,
@@ -3007,6 +3018,846 @@ async def rehber_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+
+# ══════════════════════════════════════════════════════════════════
+#  FUTBOL TAHMİN SİSTEMİ
+#  - Admin manuel maç ekler (API key opsiyonel)
+#  - Üyeler 1/X/2 ve tam skor tahmini yapar
+#  - Maç bitince admin sonucu girer → otomatik puan dağıtımı
+#  - Liderlik tablosu, kişisel istatistik
+# ══════════════════════════════════════════════════════════════════
+
+import uuid as _uuid
+
+# ──────────────────────────────────────────────────────────
+# API-FOOTBALL OTOMATİK ÇEKME SİSTEMİ
+# dashboard.api-football.com — ücretsiz 100 istek/gün
+# ──────────────────────────────────────────────────────────
+
+APIFOOTBALL_URL = "https://v3.football.api-sports.io"
+
+TAKIP_LIGLER = {
+    203: "Süper Lig",
+    39:  "Premier League",
+    140: "La Liga",
+    135: "Serie A",
+    78:  "Bundesliga",
+    61:  "Ligue 1",
+    2:   "Champions League",
+    3:   "Europa League",
+}
+
+async def _api_get(endpoint, params, api_key):
+    import aiohttp
+    headers = {"x-apisports-key": api_key}
+    url = f"{APIFOOTBALL_URL}/{endpoint}"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers=headers, params=params,
+                               timeout=aiohttp.ClientTimeout(total=10)) as r:
+            if r.status == 200:
+                return await r.json()
+            return None
+
+async def api_gunu_maclarini_cek(c, tarih=None):
+    api_key = c.get("futbol_api_key", "")
+    if not api_key:
+        return 0, "API key yok. /futbol_api_key [KEY] ile ekle."
+    if tarih is None:
+        tarih = datetime.now().strftime("%Y-%m-%d")
+    try:
+        data = await _api_get("fixtures", {"date": tarih, "timezone": "Europe/Istanbul"}, api_key)
+    except Exception as e:
+        return 0, f"Bağlantı hatası: {e}"
+    if not data or "response" not in data:
+        return 0, "API'den veri gelmedi."
+    maclar = c.setdefault("futbol_maclar", {})
+    eklenen = 0
+    guncellenen = 0
+    for fixture in data["response"]:
+        fix = fixture.get("fixture", {})
+        league = fixture.get("league", {})
+        teams = fixture.get("teams", {})
+        goals = fixture.get("goals", {})
+        fix_status = fix.get("status", {})
+        league_id = league.get("id")
+        if league_id not in TAKIP_LIGLER:
+            if league.get("country") not in ("Turkey",): continue
+        fix_id = str(fix.get("id", ""))
+        ev = teams.get("home", {}).get("name", "?")
+        dep = teams.get("away", {}).get("name", "?")
+        lig_adi = league.get("name", "Diğer")
+        ulke = league.get("country", "")
+        tarih_str = fix.get("date", "")[:16].replace("T", " ")
+        durum_short = fix_status.get("short", "NS")
+        elapsed = fix_status.get("elapsed")
+        if durum_short in ("NS", "TBD"): durum = "bekliyor"
+        elif durum_short in ("1H", "HT", "2H", "ET", "P", "BT"): durum = "canli"
+        elif durum_short in ("FT", "AET", "PEN"): durum = "bitti"
+        elif durum_short in ("CANC", "ABD"): durum = "iptal"
+        else: durum = "bekliyor"
+        ev_gol = goals.get("home")
+        dep_gol = goals.get("away")
+        skor = f"{ev_gol}-{dep_gol}" if ev_gol is not None and dep_gol is not None and durum in ("canli", "bitti") else ""
+        dakika = f"{elapsed}'" if elapsed and durum == "canli" else ""
+        mid = f"F{fix_id}"
+        if mid in maclar:
+            maclar[mid]["durum"] = durum
+            if skor: maclar[mid]["skor"] = skor
+            maclar[mid]["dakika"] = dakika
+            guncellenen += 1
+        else:
+            maclar[mid] = {
+                "ev": ev, "deplasman": dep, "tarih": tarih_str,
+                "lig": lig_adi, "ulke": ulke, "durum": durum,
+                "skor": skor, "dakika": dakika, "api_id": fix_id, "kaynak": "api",
+            }
+            eklenen += 1
+    return eklenen + guncellenen, f"✅ {eklenen} yeni, {guncellenen} güncellenen maç"
+
+async def api_canli_guncelle(c):
+    api_key = c.get("futbol_api_key", "")
+    if not api_key: return
+    try:
+        data = await _api_get("fixtures", {"live": "all"}, api_key)
+    except: return
+    if not data or "response" not in data: return
+    maclar = c.setdefault("futbol_maclar", {})
+    for fixture in data["response"]:
+        fix = fixture.get("fixture", {})
+        goals = fixture.get("goals", {})
+        fix_status = fix.get("status", {})
+        fix_id = str(fix.get("id", ""))
+        mid = f"F{fix_id}"
+        if mid not in maclar: continue
+        ev_gol = goals.get("home")
+        dep_gol = goals.get("away")
+        durum_short = fix_status.get("short", "")
+        elapsed = fix_status.get("elapsed")
+        if ev_gol is not None and dep_gol is not None:
+            maclar[mid]["skor"] = f"{ev_gol}-{dep_gol}"
+        if elapsed: maclar[mid]["dakika"] = f"{elapsed}'"
+        if durum_short in ("FT", "AET", "PEN") and maclar[mid]["durum"] != "bitti":
+            maclar[mid]["durum"] = "bitti"
+            await _otomatik_puan_dagit(c, mid, maclar[mid]["skor"])
+        elif durum_short in ("1H", "HT", "2H", "ET", "P", "BT"):
+            maclar[mid]["durum"] = "canli"
+
+async def _otomatik_puan_dagit(c, mid, skor):
+    tahminler = c.get("futbol_tahminler", {}).get(mid, {})
+    if not tahminler: return
+    m = c.get("futbol_maclar", {}).get(mid, {})
+    if m.get("puan_dagitildi"): return
+    m["puan_dagitildi"] = True
+    try:
+        ev_g, dep_g = int(skor.split("-")[0]), int(skor.split("-")[1])
+    except: return
+    if ev_g > dep_g: gercek_1x2 = "1"
+    elif ev_g == dep_g: gercek_1x2 = "X"
+    else: gercek_1x2 = "2"
+    stats = c.setdefault("futbol_tahmin_stats", {})
+    odul_1x2 = c.get("futbol_kazanc", {}).get("1X2", 100)
+    odul_skor = c.get("futbol_kazanc", {}).get("skor", 300)
+    for uid, t_raw in tahminler.items():
+        t_tip = t_raw.split("|")[1] if "|" in t_raw else "1X2"
+        uye_stats = stats.setdefault(uid, {"dogru": 0, "yanlis": 0, "toplam_puan": 0})
+        isim = c.get("bakiyeler", {}).get(uid, {}).get("isim", "?")
+        dogru = _tahmin_dogru_mu(t_raw, skor, m)
+        if dogru:
+            odul = odul_skor if t_tip == "skor" else odul_1x2
+            add_puan(c, uid, isim, odul)
+            uye_stats["dogru"] += 1
+            uye_stats["toplam_puan"] += odul
+            seri = uye_stats.get("seri_dogru", 0) + 1
+            uye_stats["seri_dogru"] = seri
+            if seri >= 3:
+                ekstra = c.get("futbol_kazanc", {}).get("galibiyet_serisi", 50)
+                add_puan(c, uid, isim, ekstra)
+                uye_stats["toplam_puan"] += ekstra
+                uye_stats["seri_dogru"] = 0
+        else:
+            uye_stats["yanlis"] += 1
+            uye_stats["seri_dogru"] = 0
+    save(c)
+
+async def futbol_gunluk_cek_job(context):
+    c = cfg()
+    if not c.get("futbol_aktif", True): return
+    if not c.get("futbol_api_key", ""): return
+    n, msg = await api_gunu_maclarini_cek(c)
+    save(c)
+    for aid in c.get("adminler", []):
+        try:
+            await context.bot.send_message(
+                aid,
+                f"⚽ <b>Günlük Maçlar Güncellendi</b>\n{msg}\n/maclar ile gör",
+                parse_mode="HTML"
+            )
+        except: pass
+
+async def futbol_canli_job(context):
+    c = cfg()
+    if not c.get("futbol_aktif", True): return
+    if not c.get("futbol_api_key", ""): return
+    canlilar = [m for m in c.get("futbol_maclar", {}).values() if m.get("durum") == "canli"]
+    if not canlilar: return
+    await api_canli_guncelle(c)
+    save(c)
+
+async def futbol_api_key_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    if not context.args:
+        c = cfg()
+        key = c.get("futbol_api_key", "")
+        return await update.message.reply_text(
+            "<b>⚽ Futbol API Ayarları</b>\n\n"
+            f"Mevcut key: {'✅ Aktif (' + key[:8] + '...)' if key else '❌ Yok'}\n\n"
+            "<b>Ücretsiz API key nasıl alınır:</b>\n"
+            "1. dashboard.api-football.com adresine git\n"
+            "2. Kayıt ol (kredi kartı gerekmez)\n"
+            "3. API key'ini kopyala\n"
+            "4. /futbol_api_key [KEY] ile gir\n\n"
+            "Ücretsiz plan: 100 istek/gün\n\n"
+            "<b>Takip edilen ligler:</b>\n"
+            + "\n".join([f"• {v}" for v in TAKIP_LIGLER.values()]),
+            parse_mode="HTML"
+        )
+    key = context.args[0]
+    c = cfg()
+    c["futbol_api_key"] = key
+    save(c)
+    try:
+        data = await _api_get("status", {}, key)
+        if data and data.get("response"):
+            sub = data["response"].get("subscription", {})
+            kalan = sub.get("requests", {}).get("current", 0)
+            limit = sub.get("requests", {}).get("limit_day", 100)
+            await update.message.reply_text(
+                f"✅ <b>API Key Kaydedildi!</b>\n\n"
+                f"Günlük limit: {limit} istek\n"
+                f"Kullanılan: {kalan}\n"
+                f"Kalan: {limit - kalan}\n\n"
+                f"Şimdi /maclar_cek ile bugünün maçlarını çek!",
+                parse_mode="HTML"
+            )
+        else:
+            await update.message.reply_text("⚠️ Key kaydedildi ama doğrulanamadı.")
+    except Exception as e:
+        await update.message.reply_text(f"⚠️ Key kaydedildi. Hata: {e}")
+
+async def maclar_cek_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    c = cfg()
+    tarih = context.args[0] if context.args else None
+    if not c.get("futbol_api_key", ""):
+        return await update.message.reply_text(
+            "❌ API key yok!\n/futbol_api_key [KEY] ile ekle.\n\n"
+            "Ücretsiz key: dashboard.api-football.com"
+        )
+    msg_obj = await update.message.reply_text("⏳ Maçlar çekiliyor...")
+    n, sonuc = await api_gunu_maclarini_cek(c, tarih)
+    save(c)
+    maclar = c.get("futbol_maclar", {})
+    bugun = tarih or datetime.now().strftime("%Y-%m-%d")
+    bugun_maclar = [(mid, m) for mid, m in maclar.items() if m.get("tarih", "").startswith(bugun)]
+    satirlar = [f"⚽ <b>Maçlar Güncellendi</b>\n{sonuc}\n"]
+    for mid, m in sorted(bugun_maclar, key=lambda x: x[1].get("tarih", ""))[:15]:
+        de = mac_durum_emoji(m.get("durum", "bekliyor"))
+        skor = f" {m['skor']}" if m.get("skor") else ""
+        dk = f" {m.get('dakika', '')}" if m.get("dakika") else ""
+        satirlar.append(f"{de} {m.get('ev', '?')} vs {m.get('deplasman', '?')}{skor}{dk}")
+    await msg_obj.edit_text("\n".join(satirlar[:20]), parse_mode="HTML")
+
+async def futbol_ligler_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    ligler_str = "\n".join([f"• {v} (ID: {k})" for k, v in TAKIP_LIGLER.items()])
+    await update.message.reply_text(
+        f"<b>⚽ Takip Edilen Ligler</b>\n\n{ligler_str}\n\n"
+        "Lig ID'leri için: api-football.com/documentation",
+        parse_mode="HTML"
+    )
+
+
+
+LIG_EMOJILERI = {
+    "Premier League": "🏴󠁧󠁢󠁥󠁮󠁧󠁿", "La Liga": "🇪🇸", "Serie A": "🇮🇹",
+    "Bundesliga": "🇩🇪", "Ligue 1": "🇫🇷", "Süper Lig": "🇹🇷",
+    "Champions League": "🌟", "Europa League": "🟠",
+    "Conference League": "🔵", "Dünya Kupası": "🌍",
+    "diğer": "⚽",
+}
+
+def lig_emoji(lig):
+    for k,v in LIG_EMOJILERI.items():
+        if k.lower() in lig.lower(): return v
+    return "⚽"
+
+def mac_id_olustur():
+    return _uuid.uuid4().hex[:6].upper()
+
+def mac_durum_emoji(durum):
+    return {"bekliyor":"⏳","canli":"🔴","bitti":"✅","iptal":"❌"}.get(durum,"⚽")
+
+def format_mac(mid, m, c=None, uid=None):
+    """Tek maç satırı formatla"""
+    de = mac_durum_emoji(m.get("durum","bekliyor"))
+    le = lig_emoji(m.get("lig",""))
+    tarih = m.get("tarih","")[:16] if m.get("tarih") else "?"
+    skor = m.get("skor","")
+    skor_str = f"  <b>{skor}</b>" if skor else ""
+    tahmin_str = ""
+    if c and uid:
+        t = c.get("futbol_tahminler",{}).get(mid,{}).get(uid,"")
+        if t:
+            secim_emoji = {"1":"🔵","X":"🟡","2":"🔴"}.get(t.split("|")[0],""  )
+            tahmin_str = f"  {secim_emoji} Tahminim: <b>{t}</b>"
+    return (
+        f"{de} <b>[{mid}]</b> {le} {m.get('lig','')}\n"
+        f"   🏠 {m.get('ev','?')}  vs  {m.get('deplasman','?')} 🚌{skor_str}\n"
+        f"   🕐 {tarih}{tahmin_str}"
+    )
+
+# ─────────────────────────────────────────
+# KOMUTLAR
+# ─────────────────────────────────────────
+
+async def maclar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """⚽ /maclar — Aktif/bekleyen maçları listele + tahmin butonları"""
+    c = cfg()
+    if not c.get("futbol_aktif", True): return
+    uid = str(update.effective_user.id)
+    maclar = c.get("futbol_maclar", {})
+
+    if not maclar:
+        return await update.message.reply_text(
+            "⚽ <b>Maç Takvimi</b>\n\n"
+            "Henüz maç eklenmedi.\n"
+            "Admin /mac_ekle komutuyla maç ekleyebilir.",
+            parse_mode="HTML"
+        )
+
+    bekleyen, canli, biten = [], [], []
+    for mid, m in maclar.items():
+        d = m.get("durum","bekliyor")
+        if d == "canli": canli.append((mid,m))
+        elif d == "bitti": biten.append((mid,m))
+        else: bekleyen.append((mid,m))
+
+    metin = "⚽ <b>Maç Takvimi</b>\n━━━━━━━━━━━━━━━━━━━━━\n"
+
+    if canli:
+        metin += "\n🔴 <b>CANLI MAÇLAR</b>\n"
+        for mid,m in canli:
+            metin += format_mac(mid, m, c, uid) + "\n\n"
+
+    if bekleyen:
+        metin += "\n⏳ <b>YAKLAŞAN MAÇLAR</b>\n"
+        for mid,m in bekleyen:
+            metin += format_mac(mid, m, c, uid) + "\n\n"
+
+    if biten:
+        metin += "\n✅ <b>TAMAMLANAN MAÇLAR</b>\n"
+        for mid,m in list(reversed(biten))[:5]:
+            metin += format_mac(mid, m, c, uid) + "\n\n"
+
+    metin += "\n💡 Tahmin için: /tahmin [MAC_ID] [1|X|2]\n"
+    metin += "🏆 Liderlik: /tahmin_top  |  İstatistik: /tahmin_stat"
+
+    # Inline butonlar — bekleyen maçlar için hızlı tahmin
+    butonlar = []
+    for mid, m in bekleyen[:4]:
+        butonlar.append([
+            InlineKeyboardButton(
+                f"⚽ {m.get('ev','?')[:12]} vs {m.get('deplasman','?')[:12]} [{mid}]",
+                callback_data=f"mac_sec_{mid}"
+            )
+        ])
+    if butonlar:
+        metin += "\n\n👇 Hızlı tahmin için maça tıkla:"
+        await update.message.reply_text(metin, parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(butonlar))
+    else:
+        await update.message.reply_text(metin, parse_mode="HTML")
+
+
+async def tahmin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """⚽ /tahmin [MAC_ID] [1|X|2] veya /tahmin [MAC_ID] [ev_gol]-[dep_gol]"""
+    c = cfg()
+    if not c.get("futbol_aktif", True): return
+    if not c.get("bakiye_aktif"): return
+    uid = str(update.effective_user.id)
+    isim = update.effective_user.first_name
+
+    if not context.args or len(context.args) < 2:
+        return await update.message.reply_text(
+            "⚽ <b>Tahmin Yap</b>\n\n"
+            "Kullanım:\n"
+            "/tahmin [MAC_ID] 1  — Ev sahibi kazanır\n"
+            "/tahmin [MAC_ID] X  — Beraberlik\n"
+            "/tahmin [MAC_ID] 2  — Deplasman kazanır\n"
+            "/tahmin [MAC_ID] 2-1  — Tam skor (Ev 2, Dep 1)\n\n"
+            "/maclar ile maç listesine bak",
+            parse_mode="HTML"
+        )
+
+    mid = context.args[0].upper()
+    maclar = c.get("futbol_maclar", {})
+    if mid not in maclar:
+        return await update.message.reply_text(f"❌ [{mid}] ID'li maç bulunamadı. /maclar ile kontrol et.")
+
+    m = maclar[mid]
+    if m.get("durum") == "bitti":
+        return await update.message.reply_text("❌ Bu maç tamamlandı, tahmin yapılamaz!")
+    if m.get("durum") == "canli":
+        return await update.message.reply_text("❌ Maç başladı, tahmin kapalı!")
+
+    secim_raw = context.args[1].upper()
+    # Tam skor mu (2-1 gibi) yoksa 1/X/2 mi?
+    if "-" in secim_raw and secim_raw != "X":
+        # Tam skor tahmini
+        parca = secim_raw.split("-")
+        if len(parca) != 2 or not all(p.isdigit() for p in parca):
+            return await update.message.reply_text("❌ Geçersiz skor formatı. Örnek: /tahmin ABC123 2-1")
+        secim = secim_raw  # "2-1"
+        tip = "skor"
+        odul = c.get("futbol_kazanc",{}).get("skor", 300)
+        secim_goster = f"🎯 Tam Skor: {m.get('ev','?')} <b>{secim}</b> {m.get('deplasman','?')}"
+    elif secim_raw in ("1","X","2"):
+        secim = secim_raw
+        tip = "1X2"
+        odul = c.get("futbol_kazanc",{}).get("1X2", 100)
+        label = {"1": f"🏠 {m.get('ev','?')} kazanır", "X": "🤝 Beraberlik", "2": f"🚌 {m.get('deplasman','?')} kazanır"}
+        secim_goster = label[secim]
+    else:
+        return await update.message.reply_text("❌ Geçersiz tahmin. 1, X, 2 veya 2-1 gibi skor gir.")
+
+    # Kaydet
+    tahminler = c.setdefault("futbol_tahminler", {})
+    mac_tahminler = tahminler.setdefault(mid, {})
+
+    # Önceki tahmin varsa güncelle
+    onceki = mac_tahminler.get(uid, "")
+    mac_tahminler[uid] = f"{secim}|{tip}"
+    save(c)
+
+    degisti_str = f"\n<i>(Önceki tahmin '{onceki.split('|')[0]}' değiştirildi)</i>" if onceki else ""
+    toplam_tahmin = len(mac_tahminler)
+
+    await update.message.reply_text(
+        f"✅ <b>Tahmin Kaydedildi!</b>{degisti_str}\n\n"
+        f"🏟 {m.get('ev','?')} vs {m.get('deplasman','?')}\n"
+        f"📌 Tahminин: {secim_goster}\n"
+        f"🏆 Doğru olursa: <b>+{odul} puan</b>\n\n"
+        f"👥 Bu maçta toplam {toplam_tahmin} tahmin var\n"
+        f"📊 /tahminlerim ile tüm tahminlerini gör",
+        parse_mode="HTML"
+    )
+
+
+async def tahminlerim_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """📊 /tahminlerim — Kişisel tahmin geçmişi"""
+    c = cfg()
+    if not c.get("futbol_aktif", True): return
+    uid = str(update.effective_user.id)
+    maclar = c.get("futbol_maclar", {})
+    tahminler = c.get("futbol_tahminler", {})
+    stats = c.get("futbol_tahmin_stats", {}).get(uid, {})
+
+    satirlar = []
+    for mid, mac_t in tahminler.items():
+        if uid not in mac_t: continue
+        m = maclar.get(mid, {})
+        t_raw = mac_t[uid]
+        t_sec = t_raw.split("|")[0]
+        durum = m.get("durum","bekliyor")
+        skor = m.get("skor","")
+
+        if durum == "bitti" and skor:
+            # Doğru mu?
+            dogru = _tahmin_dogru_mu(t_raw, skor, m)
+            sonuc = "✅" if dogru else "❌"
+        elif durum == "canli":
+            sonuc = "🔴"
+        else:
+            sonuc = "⏳"
+
+        satirlar.append(
+            f"{sonuc} <b>[{mid}]</b> {m.get('ev','?')} vs {m.get('deplasman','?')}\n"
+            f"   Tahmin: <b>{t_sec}</b>  |  Skor: {skor or '?'}"
+        )
+
+    dogru_n = stats.get("dogru", 0)
+    yanlis_n = stats.get("yanlis", 0)
+    toplam_puan = stats.get("toplam_puan", 0)
+    oran = f"%{int(dogru_n/(dogru_n+yanlis_n)*100)}" if (dogru_n+yanlis_n) > 0 else "%0"
+
+    metin = (
+        f"📊 <b>Tahmin İstatistiklerin</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"✅ Doğru: {dogru_n}  ❌ Yanlış: {yanlis_n}  🎯 Oran: {oran}\n"
+        f"🏆 Tahminlerden Kazanılan: {toplam_puan:,} puan\n\n"
+    )
+    if satirlar:
+        metin += "\n".join(satirlar)
+    else:
+        metin += "Henüz tahmin yapmadın.\n/maclar ile maçlara bak!"
+
+    await update.message.reply_text(metin, parse_mode="HTML")
+
+
+async def tahmin_top_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """🏆 /tahmin_top — Tahmin liderlik tablosu"""
+    c = cfg()
+    if not c.get("futbol_aktif", True): return
+    stats = c.get("futbol_tahmin_stats", {})
+    if not stats:
+        return await update.message.reply_text("Henüz tahmin istatistiği yok. /maclar ile tahmin yap!")
+
+    sirali = sorted(stats.items(),
+        key=lambda x: (x[1].get("dogru",0), x[1].get("toplam_puan",0)),
+        reverse=True)
+
+    uid = str(update.effective_user.id)
+    metin = "🏆 <b>Tahmin Liderlik Tablosu</b>\n━━━━━━━━━━━━━━━━━━━━━\n\n"
+    madalya = ["🥇","🥈","🥉"]
+    kendi_sira = None
+
+    for i, (u, s) in enumerate(sirali[:10]):
+        d = s.get("dogru",0)
+        y = s.get("yanlis",0)
+        tp = s.get("toplam_puan",0)
+        oran = f"%{int(d/(d+y)*100)}" if (d+y) > 0 else "%0"
+        isim = c.get("bakiyeler",{}).get(u,{}).get("isim","?")
+        icon = madalya[i] if i < 3 else f"{i+1}."
+        b_str = rozet_al(c, u)
+        kendi = " ← Sen" if u == uid else ""
+        metin += f"{icon} {b_str} {isim}  {oran} ({d}✅/{d+y})\n   +{tp:,} puan{kendi}\n"
+        if u == uid:
+            kendi_sira = i+1
+
+    if kendi_sira is None and uid in stats:
+        s = stats[uid]
+        d = s.get("dogru",0); y = s.get("yanlis",0)
+        tp = s.get("toplam_puan",0)
+        sira = next((i+1 for i,(u,_) in enumerate(sirali) if u==uid), "?")
+        metin += f"\n...\n{sira}. Sen — {d}✅/{d+y}  +{tp:,} puan"
+    elif kendi_sira is None:
+        metin += "\nSenin henüz istatistiğin yok — /maclar ile tahmin yap!"
+
+    await update.message.reply_text(metin, parse_mode="HTML")
+
+
+# ─────────────────────────────────────────
+# ADMİN KOMUTLARI
+# ─────────────────────────────────────────
+
+async def mac_ekle_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: /mac_ekle — Maç ekleme wizard'ı başlat"""
+    if not is_admin(update.effective_user.id): return
+    await update.message.reply_text(
+        "⚽ <b>Maç Ekle</b>\n\n"
+        "Format:\n"
+        "<code>/mac_ekle [Ev Takımı] | [Deplasman] | [TT-AA SS:DD] | [Lig]</code>\n\n"
+        "Örnek:\n"
+        "<code>/mac_ekle Galatasaray | Fenerbahçe | 08-03 20:00 | Süper Lig</code>\n\n"
+        "Lig örnekleri: Süper Lig, Premier League, La Liga, Serie A, Bundesliga, Champions League",
+        parse_mode="HTML"
+    )
+
+async def mac_ekle_isle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: Doğrudan maç ekle"""
+    if not is_admin(update.effective_user.id): return
+    if not context.args:
+        return await mac_ekle_cmd(update, context)
+
+    metin = " ".join(context.args)
+    parca = [p.strip() for p in metin.split("|")]
+    if len(parca) < 3:
+        return await update.message.reply_text(
+            "❌ Format hatalı!\n"
+            "/mac_ekle Galatasaray | Fenerbahçe | 08-03 20:00 | Süper Lig"
+        )
+
+    ev = parca[0]
+    dep = parca[1]
+    tarih_raw = parca[2]
+    lig = parca[3] if len(parca) > 3 else "diğer"
+
+    # Tarih formatla
+    yil = datetime.now().year
+    try:
+        tarih = datetime.strptime(f"{yil}-{tarih_raw}", "%Y-%m-%d %H:%M").strftime("%Y-%m-%d %H:%M")
+    except:
+        tarih = tarih_raw
+
+    mid = mac_id_olustur()
+    c = cfg()
+    c.setdefault("futbol_maclar", {})[mid] = {
+        "ev": ev, "deplasman": dep, "tarih": tarih,
+        "lig": lig, "durum": "bekliyor", "skor": "",
+    }
+    save(c)
+
+    le = lig_emoji(lig)
+    await update.message.reply_text(
+        f"✅ <b>Maç Eklendi!</b>\n\n"
+        f"🆔 Maç ID: <code>{mid}</code>\n"
+        f"{le} Lig: {lig}\n"
+        f"🏠 {ev}  vs  🚌 {dep}\n"
+        f"🕐 {tarih}\n\n"
+        f"Komutlar:\n"
+        f"/mac_baslat {mid} — Canlı yap\n"
+        f"/mac_bitir {mid} [skor] — Bitir ve puan dağıt\n"
+        f"/mac_iptal {mid} — İptal et",
+        parse_mode="HTML"
+    )
+
+    # Kanallara/gruba duyur
+    for kanal in c.get("kanallar", []):
+        kid = kanal.split("|")[0].strip()
+        try:
+            await context.bot.send_message(
+                kid,
+                f"⚽ <b>Yeni Maç Eklendi!</b>\n\n"
+                f"{le} <b>{lig}</b>\n"
+                f"🏠 <b>{ev}</b>  vs  🚌 <b>{dep}</b>\n"
+                f"🕐 {tarih}\n\n"
+                f"🎯 Tahmin için: /tahmin {mid} [1|X|2]\n"
+                f"📋 /maclar ile tüm maçlara bak",
+                parse_mode="HTML"
+            )
+        except: pass
+
+
+async def mac_baslat_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: /mac_baslat [MAC_ID] — Maçı canlı yap"""
+    if not is_admin(update.effective_user.id): return
+    if not context.args:
+        return await update.message.reply_text("Kullanım: /mac_baslat [MAC_ID]")
+    mid = context.args[0].upper()
+    c = cfg()
+    maclar = c.get("futbol_maclar", {})
+    if mid not in maclar:
+        return await update.message.reply_text(f"❌ [{mid}] bulunamadı.")
+    maclar[mid]["durum"] = "canli"
+    save(c)
+    m = maclar[mid]
+    await update.message.reply_text(
+        f"🔴 <b>Maç Canlı!</b>\n\n"
+        f"[{mid}] {m['ev']} vs {m['deplasman']}\n"
+        f"Tahmin girişi kapatıldı.",
+        parse_mode="HTML"
+    )
+
+
+async def mac_bitir_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: /mac_bitir [MAC_ID] [ev_gol-dep_gol] — Sonuç gir, puan dağıt"""
+    if not is_admin(update.effective_user.id): return
+    if not context.args or len(context.args) < 2:
+        return await update.message.reply_text(
+            "Kullanım: /mac_bitir [MAC_ID] [skor]\n"
+            "Örnek: /mac_bitir ABC123 2-1"
+        )
+    mid = context.args[0].upper()
+    skor = context.args[1]
+    c = cfg()
+    maclar = c.get("futbol_maclar", {})
+    if mid not in maclar:
+        return await update.message.reply_text(f"❌ [{mid}] bulunamadı.")
+
+    # Skor doğrula
+    if "-" not in skor or not all(p.isdigit() for p in skor.split("-")):
+        return await update.message.reply_text("❌ Geçersiz skor. Örnek: 2-1")
+
+    maclar[mid]["durum"] = "bitti"
+    maclar[mid]["skor"] = skor
+    m = maclar[mid]
+
+    # Skoru parse et → 1X2 sonucunu belirle
+    ev_gol, dep_gol = int(skor.split("-")[0]), int(skor.split("-")[1])
+    if ev_gol > dep_gol: gercek_1x2 = "1"
+    elif ev_gol == dep_gol: gercek_1x2 = "X"
+    else: gercek_1x2 = "2"
+
+    # Tahminleri değerlendir
+    tahminler = c.get("futbol_tahminler", {}).get(mid, {})
+    stats = c.setdefault("futbol_tahmin_stats", {})
+    kazanc_config = c.get("futbol_kazanc", {})
+    odul_1x2 = kazanc_config.get("1X2", 100)
+    odul_skor = kazanc_config.get("skor", 300)
+
+    kazananlar, yanlilar = [], []
+    for uid, t_raw in tahminler.items():
+        t_sec = t_raw.split("|")[0]
+        t_tip = t_raw.split("|")[1] if "|" in t_raw else "1X2"
+        uye_stats = stats.setdefault(uid, {"dogru":0,"yanlis":0,"toplam_puan":0})
+        isim = c.get("bakiyeler",{}).get(uid,{}).get("isim","?")
+        dogru = _tahmin_dogru_mu(t_raw, skor, m)
+        if dogru:
+            odul = odul_skor if t_tip == "skor" else odul_1x2
+            add_puan(c, uid, isim, odul)
+            uye_stats["dogru"] += 1
+            uye_stats["toplam_puan"] += odul
+            kazananlar.append(f"✅ {isim} (+{odul}p)")
+            # 3 üst üste doğru bonusu
+            seri_dogru = uye_stats.get("seri_dogru", 0) + 1
+            uye_stats["seri_dogru"] = seri_dogru
+            if seri_dogru >= 3:
+                ekstra = kazanc_config.get("galibiyet_serisi", 50)
+                add_puan(c, uid, isim, ekstra)
+                uye_stats["toplam_puan"] += ekstra
+                kazananlar[-1] += f" 🔥+{ekstra}p seri bonusu"
+                uye_stats["seri_dogru"] = 0
+        else:
+            uye_stats["yanlis"] += 1
+            uye_stats["seri_dogru"] = 0
+            yanlilar.append(isim)
+
+        # DM bildir
+        try:
+            sonuc_msg = (
+                f"⚽ <b>Maç Sonuçlandı!</b>\n\n"
+                f"{m.get('ev','?')} <b>{skor}</b> {m.get('deplasman','?')}\n"
+                f"Tahminin: <b>{t_sec}</b>\n"
+            )
+            if dogru:
+                odul2 = odul_skor if t_tip == "skor" else odul_1x2
+                sonuc_msg += f"✅ <b>DOĞRU! +{odul2} puan kazandın!</b>"
+            else:
+                sonuc_msg += f"❌ Yanlış. Doğru: {gercek_1x2} ({skor})"
+            await context.bot.send_message(int(uid), sonuc_msg, parse_mode="HTML")
+        except: pass
+
+    save(c)
+
+    # Admin özeti
+    le = lig_emoji(m.get("lig",""))
+    ozet = (
+        f"✅ <b>Maç Sonuçlandı!</b>\n\n"
+        f"{le} {m.get('lig','')}\n"
+        f"🏠 {m.get('ev','?')}  <b>{skor}</b>  🚌 {m.get('deplasman','?')}\n"
+        f"Sonuç: {'🏠 Ev' if gercek_1x2=='1' else ('🤝 Beraberlik' if gercek_1x2=='X' else '🚌 Deplasman')}\n\n"
+        f"📊 Tahminler:\n"
+        f"✅ Doğru: {len(kazananlar)} kişi\n"
+        f"❌ Yanlış: {len(yanlilar)} kişi\n"
+        f"Toplam: {len(tahminler)}\n\n"
+    )
+    if kazananlar:
+        ozet += "<b>Kazananlar:</b>\n" + "\n".join(kazananlar[:10])
+    await update.message.reply_text(ozet, parse_mode="HTML")
+
+    # Kanal duyurusu
+    for kanal in c.get("kanallar", []):
+        kid = kanal.split("|")[0].strip()
+        try:
+            await context.bot.send_message(
+                kid,
+                f"⚽ <b>MAÇ SONUCU</b>\n\n"
+                f"{le} {m.get('lig','')}\n"
+                f"🏠 <b>{m.get('ev','?')}</b>  {skor}  <b>{m.get('deplasman','?')}</b> 🚌\n\n"
+                f"🏆 {len(kazananlar)} kişi doğru tahmin yaptı!\n"
+                f"📊 Liderlik: /tahmin_top",
+                parse_mode="HTML"
+            )
+        except: pass
+
+
+async def mac_iptal_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: /mac_iptal [MAC_ID]"""
+    if not is_admin(update.effective_user.id): return
+    if not context.args:
+        return await update.message.reply_text("Kullanım: /mac_iptal [MAC_ID]")
+    mid = context.args[0].upper()
+    c = cfg()
+    if mid not in c.get("futbol_maclar", {}):
+        return await update.message.reply_text(f"❌ [{mid}] bulunamadı.")
+    c["futbol_maclar"][mid]["durum"] = "iptal"
+    save(c)
+    await update.message.reply_text(f"❌ [{mid}] iptal edildi. Tahminler iade edilmez.")
+
+
+# ─────────────────────────────────────────
+# INLINE BUTON CALLBACK (maç seçimi)
+# ─────────────────────────────────────────
+
+async def mac_tahmin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Maç listesinden tıklanınca tahmin seçenekleri göster"""
+    query = update.callback_query
+    await query.answer()
+    data = query.data  # mac_sec_ABCDEF
+
+    if data.startswith("mac_sec_"):
+        mid = data.replace("mac_sec_","")
+        c = cfg()
+        m = c.get("futbol_maclar",{}).get(mid,{})
+        if not m:
+            return await query.edit_message_text("❌ Maç bulunamadı.")
+        if m.get("durum") != "bekliyor":
+            return await query.edit_message_text("❌ Bu maç için tahmin yapılamaz.")
+        le = lig_emoji(m.get("lig",""))
+        kb = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(f"🏠 {m.get('ev','?')[:15]} (1)", callback_data=f"mac_tahmin_{mid}_1"),
+                InlineKeyboardButton("🤝 Beraberlik (X)", callback_data=f"mac_tahmin_{mid}_X"),
+                InlineKeyboardButton(f"🚌 {m.get('deplasman','?')[:15]} (2)", callback_data=f"mac_tahmin_{mid}_2"),
+            ],
+            [InlineKeyboardButton("◀️ Geri", callback_data="mac_geri")]
+        ])
+        await query.edit_message_text(
+            f"⚽ <b>Tahmin Yap</b>\n\n"
+            f"{le} {m.get('lig','')}\n"
+            f"🏠 <b>{m.get('ev','?')}</b>  vs  <b>{m.get('deplasman','?')}</b> 🚌\n"
+            f"🕐 {m.get('tarih','')[:16]}\n\n"
+            f"Sonucu tahmin et:",
+            parse_mode="HTML",
+            reply_markup=kb
+        )
+
+    elif data.startswith("mac_tahmin_"):
+        # mac_tahmin_ABCDEF_1
+        parca = data.split("_")
+        mid = parca[2]
+        secim = parca[3]
+        c = cfg()
+        uid = str(query.from_user.id)
+        isim = query.from_user.first_name
+        m = c.get("futbol_maclar",{}).get(mid,{})
+        if not m or m.get("durum") != "bekliyor":
+            return await query.edit_message_text("❌ Bu maç için tahmin yapılamaz.")
+        tahminler = c.setdefault("futbol_tahminler",{})
+        tahminler.setdefault(mid,{})[uid] = f"{secim}|1X2"
+        save(c)
+        odul = c.get("futbol_kazanc",{}).get("1X2",100)
+        label = {"1":f"🏠 {m.get('ev','?')} kazanır","X":"🤝 Beraberlik","2":f"🚌 {m.get('deplasman','?')} kazanır"}
+        await query.edit_message_text(
+            f"✅ <b>Tahmin Kaydedildi!</b>\n\n"
+            f"⚽ {m.get('ev','?')} vs {m.get('deplasman','?')}\n"
+            f"📌 Tahminин: <b>{label.get(secim,secim)}</b>\n"
+            f"🏆 Doğru olursa: <b>+{odul} puan</b>\n\n"
+            f"📊 /tahminlerim | 🏆 /tahmin_top",
+            parse_mode="HTML"
+        )
+
+    elif data == "mac_geri":
+        await query.edit_message_text("⚽ /maclar ile maç listesine bak!")
+
+
+def _tahmin_dogru_mu(t_raw, skor, m):
+    """Tahminin doğru olup olmadığını kontrol et"""
+    t_sec = t_raw.split("|")[0]
+    t_tip = t_raw.split("|")[1] if "|" in t_raw else "1X2"
+    try:
+        ev_g, dep_g = int(skor.split("-")[0]), int(skor.split("-")[1])
+    except:
+        return False
+    if t_tip == "skor":
+        return t_sec == skor
+    else:
+        if ev_g > dep_g: gercek = "1"
+        elif ev_g == dep_g: gercek = "X"
+        else: gercek = "2"
+        return t_sec == gercek
+
+
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
@@ -3050,6 +3901,18 @@ def main():
     app.add_handler(CommandHandler("dm_listesi",  dm_listesi_cmd))
     app.add_handler(CommandHandler("duyuru",      duyuru_cmd))
     app.add_handler(CommandHandler("etkinlik",    etkinlik_cmd))
+    # Futbol Tahmin
+    app.add_handler(CommandHandler("maclar",      maclar_cmd))
+    app.add_handler(CommandHandler("tahmin",      tahmin_cmd))
+    app.add_handler(CommandHandler("tahminlerim", tahminlerim_cmd))
+    app.add_handler(CommandHandler("tahmin_top",  tahmin_top_cmd))
+    app.add_handler(CommandHandler("mac_ekle",    mac_ekle_isle))
+    app.add_handler(CommandHandler("mac_baslat",  mac_baslat_cmd))
+    app.add_handler(CommandHandler("mac_bitir",   mac_bitir_cmd))
+    app.add_handler(CommandHandler("mac_iptal",   mac_iptal_cmd))
+    app.add_handler(CommandHandler("futbol_api_key", futbol_api_key_cmd))
+    app.add_handler(CommandHandler("maclar_cek",     maclar_cek_cmd))
+    app.add_handler(CommandHandler("futbol_ligler",  futbol_ligler_cmd))
     app.add_handler(CommandHandler("transfer",transfer_cmd))
     app.add_handler(CommandHandler("top",     top_cmd))
     app.add_handler(CommandHandler("ref",     ref_cmd))
@@ -3087,6 +3950,7 @@ def main():
     app.add_handler(CommandHandler("ton",    ton_cmd))
 
     # Handlers
+    app.add_handler(CallbackQueryHandler(mac_tahmin_cb, pattern="^mac_"))
     app.add_handler(CallbackQueryHandler(rehber_cb, pattern="^rehber_"))
     app.add_handler(CallbackQueryHandler(cb_v2))
     app.add_handler(ChatJoinRequestHandler(join_handler))
@@ -3096,6 +3960,9 @@ def main():
     # Jobs
     app.job_queue.run_repeating(oto_job, interval=3600, first=60)
     app.job_queue.run_repeating(rss_job, interval=3600, first=120)
+    # Futbol API Jobs
+    app.job_queue.run_daily(futbol_gunluk_cek_job, time=datetime.strptime("07:00","%H:%M").time())
+    app.job_queue.run_repeating(futbol_canli_job, interval=180, first=60)  # Her 3 dk
 
     print("🚀 TG Suite Pro v5.3 başlatıldı!")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
