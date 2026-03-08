@@ -88,6 +88,24 @@ DEFAULT = {
     "puan_carpan": 1.0,
     # ── FUTBOL TAHMİN ──
     "futbol_aktif": True,
+    # ── QUIZ ──
+    "quiz_aktif": True,
+    "quiz_sure": 20,           # saniye (her soru)
+    "quiz_odul": 150,          # doğru cevap puanı
+    "quiz_sorular": [],        # admin ekler veya varsayılan
+    "quiz_aktif_oyun": {},     # {chat_id: {soru, katilimcilar, bitis}}
+    # ── DÜELLO ──
+    "duello_aktif": True,
+    "duello_bekleyen": {},     # {duello_id: {meydan_okuyan, rakip, bahis, zaman}}
+    # ── JACKPOT ──
+    "jackpot_aktif": True,
+    "jackpot_havuz": 0,        # biriken puan
+    "jackpot_katki": 2,        # her casino oyunundan % kaç kesilir
+    "jackpot_son": {},         # {chat_id: son çekiliş zamanı}
+    "jackpot_min_katilim": 5,  # minimum katılımcı
+    # ── KASAYLA BJ ──
+    "kbj_aktif": True,
+    "kbj_masalar": {},         # {chat_id: {durum, oyuncular, eller}}
     "futbol_api_key": "4a30a8265295ef0a6ec013630adc4def",  # api-football.com
     "futbol_maclar": {},           # {mac_id: {ev, deplasman, tarih, lig, skor, durum}}
     "futbol_tahminler": {},        # {mac_id: {uid: "1"|"X"|"2"}}
@@ -3671,6 +3689,585 @@ async def yeni_uye(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.job_queue.run_once(_captcha_timeout, c["captcha_sure"],
             data={"user_id":user.id,"chat_id":update.effective_chat.id}, name=f"cap_{user.id}")
 
+
+# ════════════════════════════════════════════════════════════════
+#  SOSYAL & TOPLU OYUNLAR
+#  1. BİLGİ YARIŞMASI (Quiz)
+#  2. DÜELLO (1v1)
+#  3. JACKPOT HAVUZU
+#  4. KASAYLA BLACKJACK
+# ════════════════════════════════════════════════════════════════
+
+import asyncio as _asyncio
+import time as _time
+
+# ── VARSAYILAN SORULAR ────────────────────────────────────────
+VARSAYILAN_SORULAR = [
+    {"s": "Türkiye'nin başkenti neresidir?", "c": ["Ankara","ankara"], "ip": "🏛"},
+    {"s": "Kaç tane gezegenimiz var?", "c": ["8","sekiz"], "ip": "🪐"},
+    {"s": "Suyun kimyasal formülü nedir?", "c": ["H2O","h2o"], "ip": "💧"},
+    {"s": "1 düzine kaç tanedir?", "c": ["12","on iki"], "ip": "🔢"},
+    {"s": "Hangi hayvan 'orman kralı' olarak bilinir?", "c": ["aslan","lion"], "ip": "🦁"},
+    {"s": "Dünya'nın en büyük okyanusu hangisidir?", "c": ["büyük okyanus","pasifik","pacific"], "ip": "🌊"},
+    {"s": "İnsan vücudunda kaç kemik vardır?", "c": ["206"], "ip": "🦴"},
+    {"s": "Güneş sistemimizdeki en büyük gezegen hangisidir?", "c": ["jüpiter","jupiter"], "ip": "🪐"},
+    {"s": "Elmanın düşmesi hangi bilim insanına esin kaynağı oldu?", "c": ["newton","isaac newton"], "ip": "🍎"},
+    {"s": "Bir yılda kaç ay vardır?", "c": ["12","on iki"], "ip": "📅"},
+    {"s": "Türkiye kaç kıtada yer alır?", "c": ["2","iki"], "ip": "🌍"},
+    {"s": "Hangi metal sıvı hâlde bulunur?", "c": ["cıva","civayı"], "ip": "⚗️"},
+    {"s": "Işığın hızı yaklaşık kaç km/s'dir?", "c": ["300000","300.000","299792"], "ip": "💡"},
+    {"s": "Piramitler hangi ülkededir?", "c": ["mısır","egypt"], "ip": "🔺"},
+    {"s": "Türkiye'nin para birimi nedir?", "c": ["türk lirası","lira","tl"], "ip": "💰"},
+    {"s": "Hangi ülke hem kıta hem ülkedir?", "c": ["avustralya","australia"], "ip": "🦘"},
+    {"s": "Bal yapan böcek hangisidir?", "c": ["arı","bee"], "ip": "🐝"},
+    {"s": "1 saatte kaç dakika vardır?", "c": ["60","altmış"], "ip": "⏰"},
+    {"s": "En hızlı kara hayvanı hangisidir?", "c": ["çita","cheetah"], "ip": "🐆"},
+    {"s": "Hangi vitamin güneş ışığından üretilir?", "c": ["d","d vitamini","vitamin d"], "ip": "☀️"},
+]
+
+# ════════════════════════════════════════════════════════════
+# 1. BİLGİ YARIŞMASI
+# ════════════════════════════════════════════════════════════
+
+async def quiz_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: /quiz [soru_sayısı] — Bilgi yarışması başlat"""
+    c = cfg()
+    if not c.get("quiz_aktif", True): return
+    if not is_admin(update.effective_user.id):
+        return await update.message.reply_text("❌ Sadece adminler quiz başlatabilir!")
+    chat_id = str(update.effective_chat.id)
+    aktif = c.get("quiz_aktif_oyun", {})
+    if chat_id in aktif:
+        return await update.message.reply_text("⚠️ Zaten aktif bir quiz var! /quiz_bitir ile durdur.")
+    sayi = int(context.args[0]) if context.args and context.args[0].isdigit() else 5
+    sayi = max(1, min(20, sayi))
+    sorular = c.get("quiz_sorular", []) or VARSAYILAN_SORULAR
+    secilen = random.sample(sorular, min(sayi, len(sorular)))
+    aktif[chat_id] = {
+        "sorular": secilen, "indeks": 0,
+        "puan": {},   # {uid: puan}
+        "isimler": {},
+        "cevaplayan": set(),  # bu soruda kim cevapladı
+        "aktif": True,
+    }
+    c["quiz_aktif_oyun"] = aktif
+    save(c)
+    sure = c.get("quiz_sure", 20)
+    await update.message.reply_text(
+        f"🧠 <b>Bilgi Yarışması Başlıyor!</b>\n\n"
+        f"📋 {sayi} soru  |  ⏱ Her soru {sure} saniye\n"
+        f"🏆 Doğru cevap: +{c.get('quiz_odul',150)} puan\n\n"
+        f"Hazır mısınız? İlk soru geliyor...",
+        parse_mode="HTML"
+    )
+    await _asyncio.sleep(3)
+    await _quiz_sonraki_soru(context, chat_id, update.effective_chat.id)
+
+async def _quiz_sonraki_soru(context, chat_id_str, chat_id_int):
+    c = cfg()
+    aktif = c.get("quiz_aktif_oyun", {})
+    if chat_id_str not in aktif: return
+    oyun = aktif[chat_id_str]
+    if not oyun.get("aktif"): return
+    idx = oyun["indeks"]
+    sorular = oyun["sorular"]
+    if idx >= len(sorular):
+        await _quiz_bitir(context, chat_id_str, chat_id_int)
+        return
+    soru = sorular[idx]
+    oyun["cevaplayan"] = []
+    oyun["indeks"] += 1
+    oyun["bitis"] = _time.time() + c.get("quiz_sure", 20)
+    c["quiz_aktif_oyun"] = aktif
+    save(c)
+    sure = c.get("quiz_sure", 20)
+    msg = await context.bot.send_message(
+        chat_id_int,
+        f"🧠 <b>Soru {idx+1}/{len(sorular)}</b> {soru.get('ip','')}\n\n"
+        f"❓ {soru['s']}\n\n"
+        f"⏱ <b>{sure} saniye</b>",
+        parse_mode="HTML"
+    )
+    # Zamanlayıcı
+    await _asyncio.sleep(sure)
+    c2 = cfg()
+    aktif2 = c2.get("quiz_aktif_oyun", {})
+    if chat_id_str not in aktif2 or not aktif2[chat_id_str].get("aktif"): return
+    oyun2 = aktif2[chat_id_str]
+    if oyun2["indeks"] == idx + 1:  # hâlâ aynı soruda
+        await context.bot.send_message(
+            chat_id_int,
+            f"⏰ Süre doldu! Cevap: <b>{soru['c'][0].upper()}</b>",
+            parse_mode="HTML"
+        )
+        await _asyncio.sleep(2)
+        await _quiz_sonraki_soru(context, chat_id_str, chat_id_int)
+
+async def quiz_mesaj_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Quiz aktifken gelen mesajları kontrol et"""
+    c = cfg()
+    chat_id = str(update.effective_chat.id)
+    aktif = c.get("quiz_aktif_oyun", {})
+    if chat_id not in aktif: return
+    oyun = aktif[chat_id]
+    if not oyun.get("aktif"): return
+    uid = str(update.effective_user.id)
+    isim = update.effective_user.first_name
+    idx = oyun["indeks"] - 1
+    if idx < 0 or idx >= len(oyun["sorular"]): return
+    soru = oyun["sorular"][idx]
+    if uid in oyun.get("cevaplayan", []):
+        return  # zaten cevapladı
+    metin = (update.message.text or "").strip().lower()
+    dogru_cevaplar = [c2.lower() for c2 in soru["c"]]
+    if metin in dogru_cevaplar:
+        odul = c.get("quiz_odul", 150)
+        oyun.setdefault("puan", {})[uid] = oyun["puan"].get(uid, 0) + odul
+        oyun.setdefault("isimler", {})[uid] = isim
+        oyun.setdefault("cevaplayan", []).append(uid)
+        add_puan(c, uid, isim, odul)
+        c["quiz_aktif_oyun"] = aktif
+        save(c)
+        await update.message.reply_text(
+            f"✅ <b>{isim}</b> doğru! +{odul} puan 🎉",
+            parse_mode="HTML"
+        )
+        await _asyncio.sleep(2)
+        await _quiz_sonraki_soru(context, chat_id, update.effective_chat.id)
+
+async def _quiz_bitir(context, chat_id_str, chat_id_int):
+    c = cfg()
+    aktif = c.get("quiz_aktif_oyun", {})
+    oyun = aktif.get(chat_id_str, {})
+    if not oyun: return
+    puan = oyun.get("puan", {})
+    isimler = oyun.get("isimler", {})
+    del aktif[chat_id_str]
+    c["quiz_aktif_oyun"] = aktif
+    save(c)
+    if not puan:
+        await context.bot.send_message(chat_id_int,
+            "🧠 Quiz bitti! Kimse doğru cevap veremedi. 😢")
+        return
+    sirali = sorted(puan.items(), key=lambda x: x[1], reverse=True)
+    madalya = ["🥇","🥈","🥉"]
+    metin = "🧠 <b>Quiz Bitti! Sonuçlar:</b>\n\n"
+    for i, (uid, p) in enumerate(sirali[:10]):
+        icon = madalya[i] if i < 3 else f"{i+1}."
+        metin += f"{icon} {isimler.get(uid,'?')} — <b>{p} puan</b>\n"
+    await context.bot.send_message(chat_id_int, metin, parse_mode="HTML")
+
+async def quiz_bitir_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: /quiz_bitir — Quiz'i durdur"""
+    if not is_admin(update.effective_user.id): return
+    c = cfg()
+    chat_id = str(update.effective_chat.id)
+    aktif = c.get("quiz_aktif_oyun", {})
+    if chat_id not in aktif:
+        return await update.message.reply_text("Aktif quiz yok.")
+    aktif[chat_id]["aktif"] = False
+    c["quiz_aktif_oyun"] = aktif
+    save(c)
+    await update.message.reply_text("⏹ Quiz durduruldu.")
+
+async def quiz_soru_ekle_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: /quiz_ekle [soru] | [cevap1,cevap2]"""
+    if not is_admin(update.effective_user.id): return
+    if not context.args:
+        return await update.message.reply_text(
+            "Kullanım: /quiz_ekle Soru metni | cevap1,cevap2\n"
+            "Örnek: /quiz_ekle Türkiye'nin başkenti? | Ankara,ankara")
+    metin = " ".join(context.args)
+    if "|" not in metin:
+        return await update.message.reply_text("❌ | ile soru ve cevabı ayır!")
+    parca = metin.split("|", 1)
+    soru_m = parca[0].strip()
+    cevaplar = [c2.strip() for c2 in parca[1].split(",")]
+    c = cfg()
+    c.setdefault("quiz_sorular", []).append({"s": soru_m, "c": cevaplar, "ip": "❓"})
+    save(c)
+    await update.message.reply_text(
+        f"✅ Soru eklendi!\n❓ {soru_m}\n✅ Cevaplar: {', '.join(cevaplar)}\n"
+        f"Toplam soru: {len(c['quiz_sorular'])}")
+
+# ════════════════════════════════════════════════════════════
+# 2. DÜELLO (1v1)
+# ════════════════════════════════════════════════════════════
+
+async def duello_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """⚔️ /duello @kullanici [bahis] — 1v1 meydan okuma"""
+    c = cfg()
+    if not c.get("duello_aktif", True): return
+    if not c.get("bakiye_aktif"): return
+    if not context.args or len(context.args) < 2:
+        return await update.message.reply_text(
+            "⚔️ <b>Düello</b>\n\nKullanım: /duello @kullanici [bahis]\n"
+            "Örnek: /duello @ahmet 500\n\n"
+            "Kazanan tüm bahisi alır! 🏆", parse_mode="HTML")
+    uid = str(update.effective_user.id)
+    isim = update.effective_user.first_name
+    hata, bahis = bahis_kontrol(c, uid, context.args[-1])
+    if hata: return await update.message.reply_text(hata)
+    # Rakip mention'ı
+    rakip_mention = context.args[0].replace("@","")
+    duello_id = f"D{random.randint(10000,99999)}"
+    c.setdefault("duello_bekleyen", {})[duello_id] = {
+        "meydan_okuyan_id": uid,
+        "meydan_okuyan_isim": isim,
+        "rakip_mention": rakip_mention,
+        "bahis": bahis,
+        "zaman": _time.time(),
+        "chat_id": update.effective_chat.id,
+    }
+    save(c)
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("⚔️ Kabul Et", callback_data=f"duello_kabul_{duello_id}"),
+        InlineKeyboardButton("❌ Reddet",   callback_data=f"duello_red_{duello_id}"),
+    ]])
+    await update.message.reply_text(
+        f"⚔️ <b>DÜELLO MEYDAN OKUMASI!</b>\n\n"
+        f"🗡 <b>{isim}</b> → @{rakip_mention}\n"
+        f"💰 Bahis: <b>{bahis:,} puan</b>\n\n"
+        f"@{rakip_mention}, meydan okumayı kabul ediyor musun?\n"
+        f"⏳ 60 saniye içinde yanıtla!",
+        parse_mode="HTML", reply_markup=kb)
+
+async def duello_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    uid = str(query.from_user.id)
+    isim = query.from_user.first_name
+    c = cfg()
+    if data.startswith("duello_kabul_"):
+        duello_id = data.replace("duello_kabul_","")
+        bekleyen = c.get("duello_bekleyen",{})
+        if duello_id not in bekleyen:
+            return await query.edit_message_text("❌ Düello süresi doldu veya iptal edildi.")
+        d = bekleyen[duello_id]
+        # Süre kontrolü
+        if _time.time() - d["zaman"] > 60:
+            del bekleyen[duello_id]; save(c)
+            return await query.edit_message_text("⏰ Düello süresi doldu!")
+        # Bakiye kontrol
+        hata_r, _ = bahis_kontrol(c, uid, str(d["bahis"]))
+        if hata_r:
+            return await query.edit_message_text(f"❌ {isim} yeterli bakiyesi yok: {hata_r}")
+        # DÜELLO OYNANİYOR — Zar ile
+        meydan_uid = d["meydan_okuyan_id"]
+        meydan_isim = d["meydan_okuyan_isim"]
+        bahis = d["bahis"]
+        zar1 = random.randint(1,6); zar2 = random.randint(1,6)
+        ze = ["1️⃣","2️⃣","3️⃣","4️⃣","5️⃣","6️⃣"]
+        while zar1 == zar2:  # beraberlik olmasın
+            zar1 = random.randint(1,6); zar2 = random.randint(1,6)
+        if zar1 > zar2:
+            kazanan_uid, kazanan_isim = meydan_uid, meydan_isim
+            kaybeden_uid, kaybeden_isim = uid, isim
+            k1, k2 = zar1, zar2
+        else:
+            kazanan_uid, kazanan_isim = uid, isim
+            kaybeden_uid, kaybeden_isim = meydan_uid, meydan_isim
+            k1, k2 = zar2, zar1
+        add_puan(c, kazanan_uid, kazanan_isim, bahis)
+        add_puan(c, kaybeden_uid, kaybeden_isim, -bahis)
+        del bekleyen[duello_id]
+        c["duello_bekleyen"] = bekleyen
+        save(c)
+        await query.edit_message_text(
+            f"⚔️ <b>DÜELLO SONUCU!</b>\n\n"
+            f"🗡 {meydan_isim}: {ze[zar1-1]}\n"
+            f"🗡 {isim}: {ze[zar2-1]}\n\n"
+            f"👑 <b>{kazanan_isim} KAZANDI!</b>\n"
+            f"➕ <b>+{bahis:,} puan</b>\n"
+            f"💰 {kaybeden_isim} -{bahis:,} puan",
+            parse_mode="HTML")
+    elif data.startswith("duello_red_"):
+        duello_id = data.replace("duello_red_","")
+        bekleyen = c.get("duello_bekleyen",{})
+        if duello_id in bekleyen:
+            d = bekleyen[duello_id]
+            del bekleyen[duello_id]; save(c)
+            await query.edit_message_text(
+                f"❌ <b>{isim}</b> düelloyu reddetti.",
+                parse_mode="HTML")
+
+# ════════════════════════════════════════════════════════════
+# 3. JACKPOT HAVUZU
+# ════════════════════════════════════════════════════════════
+
+def jackpot_katki_kes(c, uid, isim, bahis):
+    """Casino oyunlarından %katki jackpot'a aktar"""
+    oran = c.get("jackpot_katki", 2) / 100
+    katki = max(1, int(bahis * oran))
+    c["jackpot_havuz"] = c.get("jackpot_havuz", 0) + katki
+    return katki
+
+async def jackpot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """💰 /jackpot — Jackpot havuzunu gör ve katıl"""
+    c = cfg()
+    if not c.get("jackpot_aktif", True): return
+    havuz = c.get("jackpot_havuz", 0)
+    uid = str(update.effective_user.id)
+    isim = update.effective_user.first_name
+    chat_id = str(update.effective_chat.id)
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton(f"🎰 Çekilişe Katıl!", callback_data=f"jackpot_katil_{chat_id}")
+    ]])
+    await update.message.reply_text(
+        f"💰 <b>JACKPOT HAVUZU</b>\n\n"
+        f"🏆 Mevcut Havuz: <b>{havuz:,} puan</b>\n\n"
+        f"Her casino oyunundan %{c.get('jackpot_katki',2)} bu havuza eklenir.\n"
+        f"Admin çekiliş başlatınca katılabilirsin!\n\n"
+        f"🎰 Çekilişe katılmak için butona bas:",
+        parse_mode="HTML", reply_markup=kb)
+
+async def jackpot_cekilis_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: /jackpot_cekilis — Jackpot çekilişi başlat"""
+    if not is_admin(update.effective_user.id): return
+    c = cfg()
+    havuz = c.get("jackpot_havuz", 0)
+    if havuz < 100:
+        return await update.message.reply_text(f"❌ Havuz çok az: {havuz} puan. Min 100 gerekli.")
+    chat_id = str(update.effective_chat.id)
+    # Katılımcıları temizle ve başlat
+    c.setdefault("jackpot_son", {})[chat_id] = {
+        "katilimcilar": {},
+        "baslangic": _time.time(),
+        "havuz": havuz,
+        "aktif": True,
+    }
+    save(c)
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🎰 Katıl!", callback_data=f"jackpot_katil_{chat_id}")
+    ]])
+    msg = await update.message.reply_text(
+        f"🎰 <b>JACKPOT ÇEKİLİŞİ BAŞLADI!</b>\n\n"
+        f"💰 Havuz: <b>{havuz:,} puan</b>\n"
+        f"⏳ 60 saniye içinde katıl!\n\n"
+        f"👇 Butona bas ve şansını dene!",
+        parse_mode="HTML", reply_markup=kb)
+    await _asyncio.sleep(60)
+    c2 = cfg()
+    jdata = c2.get("jackpot_son",{}).get(chat_id,{})
+    if not jdata.get("aktif"): return
+    katilimcilar = jdata.get("katilimcilar",{})
+    jdata["aktif"] = False
+    c2["jackpot_son"][chat_id] = jdata
+    if not katilimcilar:
+        save(c2)
+        await context.bot.send_message(update.effective_chat.id,
+            "😢 Jackpot çekilişine kimse katılmadı! Havuz birikmeye devam ediyor.")
+        return
+    kazanan_uid = random.choice(list(katilimcilar.keys()))
+    kazanan_isim = katilimcilar[kazanan_uid]
+    add_puan(c2, kazanan_uid, kazanan_isim, havuz)
+    c2["jackpot_havuz"] = 0
+    save(c2)
+    await context.bot.send_message(
+        update.effective_chat.id,
+        f"🎰 <b>JACKPOT KAZANANI!</b>\n\n"
+        f"👑 <b>{kazanan_isim}</b>\n"
+        f"💰 <b>+{havuz:,} puan</b> kazandı!\n\n"
+        f"🎊 Tebrikler! Havuz sıfırlandı.",
+        parse_mode="HTML")
+
+async def jackpot_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    if not data.startswith("jackpot_katil_"): return
+    chat_id = data.replace("jackpot_katil_","")
+    uid = str(query.from_user.id)
+    isim = query.from_user.first_name
+    c = cfg()
+    jdata = c.get("jackpot_son",{}).get(chat_id,{})
+    if not jdata.get("aktif"):
+        return await query.answer("❌ Aktif çekiliş yok!", show_alert=True)
+    katilimcilar = jdata.setdefault("katilimcilar",{})
+    if uid in katilimcilar:
+        return await query.answer("✅ Zaten katıldın!", show_alert=True)
+    katilimcilar[uid] = isim
+    c["jackpot_son"][chat_id] = jdata
+    save(c)
+    sayi = len(katilimcilar)
+    await query.answer(f"✅ Katıldın! Toplam {sayi} kişi.", show_alert=True)
+    try:
+        await query.edit_message_text(
+            query.message.text + f"\n👥 Katılımcı: {sayi}",
+            parse_mode="HTML",
+            reply_markup=query.message.reply_markup)
+    except: pass
+
+# ════════════════════════════════════════════════════════════
+# 4. KASAYLA BLACKJACK (Canlı masa)
+# ════════════════════════════════════════════════════════════
+
+_KBJ_KARTLAR = ["A","2","3","4","5","6","7","8","9","10","J","Q","K"] * 4
+_KBJ_DEGER   = {"A":11,"2":2,"3":3,"4":4,"5":5,"6":6,"7":7,"8":8,"9":9,"10":10,"J":10,"Q":10,"K":10}
+
+def _kbj_puan(el):
+    p = sum(_KBJ_DEGER[k] for k in el)
+    aslar = el.count("A")
+    while p > 21 and aslar:
+        p -= 10; aslar -= 1
+    return p
+
+def _kbj_el_str(el, gizli=False):
+    if gizli and len(el) > 1:
+        return f"{el[0]} 🂠"
+    return " ".join(el) + f" ({_kbj_puan(el)})"
+
+async def kbj_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """🃏 /bj [bahis] — Kasayla BlackJack oyna"""
+    c = cfg()
+    if not c.get("kbj_aktif", True): return
+    if not c.get("bakiye_aktif"): return
+    uid = str(update.effective_user.id)
+    isim = update.effective_user.first_name
+    if not context.args:
+        return await update.message.reply_text(
+            "🃏 <b>Kasayla BlackJack</b>\n\nKullanım: /bj [bahis]\n"
+            "Örnek: /bj 200\n\n"
+            "Hedef: 21'i geçmeden kasadan yüksek puan al!\n"
+            "• Kart çek: Kart Al\n• Dur: Dur (kasa devam eder)", parse_mode="HTML")
+    hata, bahis = bahis_kontrol(c, uid, context.args[0])
+    if hata: return await update.message.reply_text(hata)
+    # Masa oluştur
+    deste = _KBJ_KARTLAR.copy()
+    random.shuffle(deste)
+    oyuncu_el = [deste.pop(), deste.pop()]
+    kasa_el   = [deste.pop(), deste.pop()]
+    oyuncu_p  = _kbj_puan(oyuncu_el)
+    masalar = c.setdefault("kbj_masalar", {})
+    masalar[uid] = {
+        "oyuncu_el": oyuncu_el, "kasa_el": kasa_el,
+        "deste": deste, "bahis": bahis,
+        "isim": isim, "bitti": False,
+    }
+    save(c)
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🃏 Kart Al", callback_data=f"kbj_al_{uid}"),
+        InlineKeyboardButton("✋ Dur",     callback_data=f"kbj_dur_{uid}"),
+    ]])
+    await update.message.reply_text(
+        f"🃏 <b>BlackJack — {isim}</b>\n\n"
+        f"Sen:  {_kbj_el_str(oyuncu_el)}\n"
+        f"Kasa: {_kbj_el_str(kasa_el, gizli=True)}\n\n"
+        f"💰 Bahis: {bahis:,} puan"
+        + ("\n\n🎉 <b>BLACKJACK!</b>" if oyuncu_p==21 else ""),
+        parse_mode="HTML",
+        reply_markup=None if oyuncu_p==21 else kb)
+    if oyuncu_p == 21:
+        await _kbj_bitir(update, context, uid, "dur")
+
+async def kbj_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    hedef_uid = data.split("_")[-1]
+    uid = str(query.from_user.id)
+    if uid != hedef_uid:
+        return await query.answer("❌ Bu masa sana ait değil!", show_alert=True)
+    c = cfg()
+    masalar = c.get("kbj_masalar", {})
+    if uid not in masalar or masalar[uid]["bitti"]:
+        return await query.edit_message_text("❌ Aktif masa yok.")
+    masa = masalar[uid]
+    if data.startswith("kbj_al_"):
+        # Kart çek
+        masa["oyuncu_el"].append(masa["deste"].pop())
+        p = _kbj_puan(masa["oyuncu_el"])
+        c["kbj_masalar"] = masalar
+        save(c)
+        if p > 21:
+            await query.edit_message_text(
+                f"🃏 <b>BlackJack — {masa['isim']}</b>\n\n"
+                f"Sen:  {_kbj_el_str(masa['oyuncu_el'])}\n"
+                f"Kasa: {_kbj_el_str(masa['kasa_el'], gizli=True)}\n\n"
+                f"💥 <b>BUST! 21'i geçtin!</b>",
+                parse_mode="HTML")
+            await _kbj_bitir_edit(query, context, uid, "bust")
+        else:
+            kb = InlineKeyboardMarkup([[
+                InlineKeyboardButton("🃏 Kart Al", callback_data=f"kbj_al_{uid}"),
+                InlineKeyboardButton("✋ Dur",     callback_data=f"kbj_dur_{uid}"),
+            ]])
+            await query.edit_message_text(
+                f"🃏 <b>BlackJack — {masa['isim']}</b>\n\n"
+                f"Sen:  {_kbj_el_str(masa['oyuncu_el'])}\n"
+                f"Kasa: {_kbj_el_str(masa['kasa_el'], gizli=True)}\n\n"
+                f"💰 Bahis: {masa['bahis']:,} puan",
+                parse_mode="HTML", reply_markup=kb)
+    elif data.startswith("kbj_dur_"):
+        await _kbj_bitir_edit(query, context, uid, "dur")
+
+async def _kbj_bitir_edit(query, context, uid, sebep):
+    c = cfg()
+    masalar = c.get("kbj_masalar", {})
+    if uid not in masalar: return
+    masa = masalar[uid]
+    if masa["bitti"]: return
+    masa["bitti"] = True
+    isim = masa["isim"]
+    bahis = masa["bahis"]
+    oyuncu_el = masa["oyuncu_el"]
+    kasa_el   = masa["kasa_el"]
+    deste     = masa["deste"]
+    # Kasa devam eder
+    while _kbj_puan(kasa_el) < 17 and deste:
+        kasa_el.append(deste.pop())
+    o_p = _kbj_puan(oyuncu_el)
+    k_p = _kbj_puan(kasa_el)
+    if sebep == "bust":
+        kazanc = -bahis; sonuc = "💥 Bust! Kaybettin."
+    elif o_p == 21 and len(oyuncu_el)==2:
+        kazanc = int(bahis*1.5); sonuc = "🃏 BLACKJACK! 1.5x!"
+    elif k_p > 21 or o_p > k_p:
+        kazanc = bahis; sonuc = "🎉 Kazandın!"
+    elif o_p == k_p:
+        kazanc = 0; sonuc = "🤝 Beraberlik!"
+    else:
+        kazanc = -bahis; sonuc = "😢 Kaybettin."
+    yeni = add_puan(c, uid, isim, kazanc)
+    c["kbj_masalar"] = masalar
+    save(c)
+    try:
+        await query.edit_message_text(
+            f"🃏 <b>BlackJack — {isim}</b>\n\n"
+            f"Sen:  {_kbj_el_str(oyuncu_el)}\n"
+            f"Kasa: {_kbj_el_str(kasa_el)}\n\n"
+            f"{sonuc}\n"
+            f"{'➕' if kazanc>=0 else '➖'} <b>{abs(kazanc):,} puan</b>\n"
+            f"💰 Bakiye: <b>{yeni:,}</b>",
+            parse_mode="HTML")
+    except: pass
+
+async def _kbj_bitir(update, context, uid, sebep):
+    """İlk mesajdan bitir (blackjack anında)"""
+    c = cfg()
+    masalar = c.get("kbj_masalar", {})
+    if uid not in masalar: return
+    masa = masalar[uid]
+    if masa["bitti"]: return
+    masa["bitti"] = True
+    isim = masa["isim"]; bahis = masa["bahis"]
+    oyuncu_el = masa["oyuncu_el"]; kasa_el = masa["kasa_el"]
+    deste = masa["deste"]
+    while _kbj_puan(kasa_el) < 17 and deste:
+        kasa_el.append(deste.pop())
+    o_p = _kbj_puan(oyuncu_el); k_p = _kbj_puan(kasa_el)
+    kazanc = int(bahis*1.5); sonuc = "🃏 BLACKJACK! 1.5x!"
+    yeni = add_puan(c, uid, isim, kazanc)
+    c["kbj_masalar"] = masalar; save(c)
+    await update.message.reply_text(
+        f"🃏 <b>BlackJack — {isim}</b>\n\n"
+        f"Sen:  {_kbj_el_str(oyuncu_el)}\n"
+        f"Kasa: {_kbj_el_str(kasa_el)}\n\n"
+        f"{sonuc}\n➕ <b>{kazanc:,} puan</b>\n💰 Bakiye: <b>{yeni:,}</b>",
+        parse_mode="HTML")
+
+
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
@@ -3727,6 +4324,19 @@ def main():
     app.add_handler(CommandHandler("futbol_api_key", futbol_api_key_cmd))
     app.add_handler(CommandHandler("maclar_cek",     maclar_cek_cmd))
     app.add_handler(CommandHandler("futbol_ligler",  futbol_ligler_cmd))
+    # ── Quiz ──
+    app.add_handler(CommandHandler("quiz",          quiz_cmd))
+    app.add_handler(CommandHandler("quiz_bitir",    quiz_bitir_cmd))
+    app.add_handler(CommandHandler("quiz_ekle",     quiz_soru_ekle_cmd))
+    # ── Düello ──
+    app.add_handler(CommandHandler("duello",        duello_cmd))
+    app.add_handler(CommandHandler("duel",          duello_cmd))
+    # ── Jackpot ──
+    app.add_handler(CommandHandler("jackpot",       jackpot_cmd))
+    app.add_handler(CommandHandler("jackpot_cekilis", jackpot_cekilis_cmd))
+    # ── Kasayla BJ ──
+    app.add_handler(CommandHandler("bj",            kbj_cmd))
+    app.add_handler(CommandHandler("blackjack",     kbj_cmd))
     app.add_handler(CommandHandler("transfer",transfer_cmd))
     app.add_handler(CommandHandler("top",     top_cmd))
     app.add_handler(CommandHandler("ref",     ref_cmd))
@@ -3764,6 +4374,9 @@ def main():
     app.add_handler(CommandHandler("ton",    ton_cmd))
 
     # Handlers
+    app.add_handler(CallbackQueryHandler(duello_cb,     pattern="^duello_"))
+    app.add_handler(CallbackQueryHandler(jackpot_cb,    pattern="^jackpot_"))
+    app.add_handler(CallbackQueryHandler(kbj_cb,        pattern="^kbj_"))
     app.add_handler(CallbackQueryHandler(mac_tahmin_cb, pattern="^mac_"))
     app.add_handler(CallbackQueryHandler(rehber_cb, pattern="^rehber_"))
     app.add_handler(CallbackQueryHandler(cb_v2))
