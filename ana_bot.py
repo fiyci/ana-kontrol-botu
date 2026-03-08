@@ -6723,6 +6723,10 @@ KOMUTLAR_KATEGORILER = {
         ("/jackpot", "Jackpot havuzunu gör"),
         ("/quiz", "Bilgi yarışması"),
         ("/kelime", "Kelime zinciri"),
+        ("/tkm bahis", "Taş Kağıt Makas ✊✌️🖐"),
+        ("/bulmaca", "Günlük Wordle bulmacası 🔤"),
+        ("/grup_savas", "Grup savaşı başlat ⚔️"),
+        ("/davet_yaris", "Davet yarışması sıralaması 🏆"),
         ("/kazan", "Günlük mini görev"),
     ],
     "⚽ Futbol & Tahmin": [
@@ -6739,6 +6743,7 @@ KOMUTLAR_KATEGORILER = {
         ("/sponsorlar", "Sponsor siteler"),
         ("/rehber", "Rehber & yardım"),
         ("/bildirim", "DM bildirimlerini aç/kapat"),
+        ("/aktivite", "7 günlük aktivite haritası 📊")
         ("/kurallar", "Grup kuralları"),
         ("/ping", "Bot hız testi"),
         ("/istat", "Bot istatistikleri"),
@@ -7910,14 +7915,17 @@ def main():
     print("🚀 SOGTİLLA v5.3 başlatıldı!")
     # BotCommand autocomplete
     cmds = [
-        BotCommand("start",    "🏠 Ana panel"),
-        BotCommand("puan",     "💰 Bakiyeni gör"),
-        BotCommand("bonus",    "🎁 Günlük bonus"),
-        BotCommand("commands", "📋 Tüm komutlar"),
-        BotCommand("zar",      "🎲 Zar at"),
-        BotCommand("slot",     "🎰 Slot oyna"),
-        BotCommand("top",      "🏆 Liderlik"),
-        BotCommand("iptal",    "❌ İptal"),
+        BotCommand("start",       "🏠 Ana panel"),
+        BotCommand("puan",        "💰 Bakiyeni gör"),
+        BotCommand("bonus",       "🎁 Günlük bonus"),
+        BotCommand("magaza",      "🛒 Puan mağazası"),
+        BotCommand("bulmaca",     "🔤 Günlük bulmaca"),
+        BotCommand("tkm",         "✊ Taş Kağıt Makas"),
+        BotCommand("davet_yaris", "🏆 Davet yarışması"),
+        BotCommand("aktivite",    "📊 Aktivite haritası"),
+        BotCommand("top",         "🏆 Liderlik tablosu"),
+        BotCommand("commands",    "📋 Tüm komutlar"),
+        BotCommand("iptal",       "❌ İptal"),
     ]
     try:
         import asyncio as _aio2
