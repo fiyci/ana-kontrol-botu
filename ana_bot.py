@@ -3522,7 +3522,7 @@ GOREVLER = {
     "haftalik":    {"puan": 200, "aciklama": "📅 Haftalık giriş", "tekrar": True},
 }
 
-def iptal(update, context): context.user_data["bekle"]=None; await update.message.reply_text("❌ İptal.", reply_markup=ana_kb())
+async def iptal(update, context, *args): context.user_data["bekle"]=None; await update.message.reply_text("❌ İptal.")
 
 async def join_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     c=cfg()
@@ -4268,6 +4268,410 @@ async def _kbj_bitir(update, context, uid, sebep):
         parse_mode="HTML")
 
 
+
+# ═══════════════════════════════════════════════════════════════
+#  EKSİK ÖZELLİKLER MODÜLÜ
+#  - /temizle  — Mesaj silme
+#  - /istat    — Bot istatistikleri
+#  - /cekilis  — Çekiliş sistemi
+#  - /vip      — VIP bilgi & aktifleştir
+#  - /bildirim — DM bildirimleri aç/kapat
+#  - /kelime   — Kelime oyunu (zincirleme)
+#  - Flood kontrol (mesaj_handler_v2'ye entegre)
+#  - Günlük istatistik job
+# ═══════════════════════════════════════════════════════════════
+
+# ── /temizle ──────────────────────────────────────────────────
+async def temizle_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: /temizle [N] — Son N mesajı sil (max 100)"""
+    if not is_admin(update.effective_user.id): return
+    n = int(context.args[0]) if context.args and context.args[0].isdigit() else 10
+    n = min(n, 100)
+    try:
+        msgs = []
+        async for msg in context.bot.get_updates():
+            pass
+        deleted = await update.effective_chat.delete_messages(
+            [update.message.message_id - i for i in range(1, n+1)]
+        )
+        await update.message.reply_text(f"🗑 {n} mesaj silindi.", parse_mode="HTML")
+    except Exception as e:
+        # Alternatif yöntem
+        try:
+            await update.message.delete()
+            silinebilir = 0
+            for i in range(1, n+1):
+                try:
+                    await context.bot.delete_message(
+                        update.effective_chat.id,
+                        update.message.message_id - i
+                    )
+                    silinebilir += 1
+                except: pass
+            note = await update.message.reply_text(f"🗑 {silinebilir} mesaj silindi.")
+            await _asyncio.sleep(3)
+            try: await note.delete()
+            except: pass
+        except Exception as e2:
+            await update.message.reply_text(f"❌ Silme hatası: {e2}")
+
+# ── /istat ────────────────────────────────────────────────────
+async def istatistik_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """📊 /istat — Bot & grup istatistikleri"""
+    c = cfg()
+    stats = c.get("stats", {})
+    bakiyeler = c.get("bakiyeler", {})
+    maclar = c.get("futbol_maclar", {})
+    quiz_oyunlar = c.get("quiz_aktif_oyun", {})
+
+    toplam_uye = len(bakiyeler)
+    toplam_puan = sum(v.get("bakiye", 0) for v in bakiyeler.values() if isinstance(v, dict))
+    casino_oyun = stats.get("casino_oyun", 0)
+    aktif_duello = len(c.get("duello_bekleyen", {}))
+    jackpot_havuz = c.get("jackpot_havuz", 0)
+    toplam_mac = len(maclar)
+    tahmin_sayisi = sum(len(v) for v in c.get("futbol_tahminler", {}).values())
+
+    # En zengin 3
+    sirali = sorted([(uid, v.get("bakiye",0), v.get("isim","?"))
+                     for uid,v in bakiyeler.items() if isinstance(v,dict)],
+                    key=lambda x: x[1], reverse=True)[:3]
+    zengin_str = "\n".join([f"  {['🥇','🥈','🥉'][i]} {isim}: {b:,}p"
+                            for i,(uid,b,isim) in enumerate(sirali)])
+
+    await update.message.reply_text(
+        f"📊 <b>Bot İstatistikleri</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"👥 Kayıtlı üye: <b>{toplam_uye}</b>\n"
+        f"💰 Toplam puan: <b>{toplam_puan:,}</b>\n"
+        f"🎰 Casino oyunu: <b>{casino_oyun:,}</b>\n"
+        f"⚔️ Aktif düello: <b>{aktif_duello}</b>\n"
+        f"💎 Jackpot havuz: <b>{jackpot_havuz:,}</b>\n"
+        f"⚽ Maç sayısı: <b>{toplam_mac}</b>\n"
+        f"🎯 Tahmin sayısı: <b>{tahmin_sayisi}</b>\n\n"
+        f"🏆 <b>En Zenginler:</b>\n{zengin_str or '  Henüz kimse yok'}",
+        parse_mode="HTML"
+    )
+
+# ── /cekilis ──────────────────────────────────────────────────
+async def cekilis_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: /cekilis [ödül_puan] [kazanan_sayısı] — Çekiliş başlat"""
+    if not is_admin(update.effective_user.id): return
+    if not context.args:
+        return await update.message.reply_text(
+            "🎁 <b>Çekiliş</b>\n\n"
+            "Kullanım: /cekilis [ödül] [kazanan_sayısı]\n"
+            "Örnek: /cekilis 1000 3\n\n"
+            "Üyeler butona basarak katılır, 60sn sonra çekiliş yapılır.",
+            parse_mode="HTML")
+    odul = int(context.args[0]) if context.args[0].isdigit() else 500
+    kazanan_n = int(context.args[1]) if len(context.args) > 1 and context.args[1].isdigit() else 1
+    chat_id = str(update.effective_chat.id)
+    c = cfg()
+    c.setdefault("cekilisler", {})[chat_id] = {
+        "odul": odul, "kazanan_n": kazanan_n,
+        "katilimcilar": {}, "aktif": True,
+        "baslatan": update.effective_user.first_name,
+    }
+    save(c)
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🎁 Katıl!", callback_data=f"cekilis_katil_{chat_id}")
+    ]])
+    msg = await update.message.reply_text(
+        f"🎁 <b>ÇEKİLİŞ BAŞLADI!</b>\n\n"
+        f"🏆 Ödül: <b>{odul:,} puan</b> × {kazanan_n} kazanan\n"
+        f"⏳ 60 saniye içinde katıl!\n"
+        f"👇 Butona bas:",
+        parse_mode="HTML", reply_markup=kb)
+    await _asyncio.sleep(60)
+    c2 = cfg()
+    cdata = c2.get("cekilisler", {}).get(chat_id, {})
+    if not cdata.get("aktif"): return
+    cdata["aktif"] = False
+    c2["cekilisler"][chat_id] = cdata
+    katilimcilar = cdata.get("katilimcilar", {})
+    if not katilimcilar:
+        save(c2)
+        await context.bot.send_message(update.effective_chat.id,
+            "😢 Çekilişe kimse katılmadı!")
+        return
+    k_list = list(katilimcilar.items())
+    kazananlar = random.sample(k_list, min(kazanan_n, len(k_list)))
+    for uid, isim in kazananlar:
+        add_puan(c2, uid, isim, odul)
+    save(c2)
+    kazanan_str = "\n".join([f"🎉 <b>{isim}</b> +{odul:,} puan" for uid,isim in kazananlar])
+    await context.bot.send_message(
+        update.effective_chat.id,
+        f"🎁 <b>ÇEKİLİŞ SONUÇLANDI!</b>\n\n"
+        f"👥 Katılımcı: {len(katilimcilar)}\n\n"
+        f"🏆 <b>Kazananlar:</b>\n{kazanan_str}",
+        parse_mode="HTML")
+
+async def cekilis_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not query.data.startswith("cekilis_katil_"): return
+    chat_id = query.data.replace("cekilis_katil_", "")
+    uid = str(query.from_user.id)
+    isim = query.from_user.first_name
+    c = cfg()
+    cdata = c.get("cekilisler", {}).get(chat_id, {})
+    if not cdata.get("aktif"):
+        return await query.answer("❌ Aktif çekiliş yok!", show_alert=True)
+    if uid in cdata.get("katilimcilar", {}):
+        return await query.answer("✅ Zaten katıldın!", show_alert=True)
+    cdata.setdefault("katilimcilar", {})[uid] = isim
+    c["cekilisler"][chat_id] = cdata
+    save(c)
+    n = len(cdata["katilimcilar"])
+    await query.answer(f"✅ Katıldın! Toplam {n} kişi.", show_alert=True)
+    try:
+        yeni_text = query.message.text + f"\n👥 Katılımcı: {n}"
+        await query.edit_message_text(yeni_text, parse_mode="HTML",
+            reply_markup=query.message.reply_markup)
+    except: pass
+
+# ── /vip ──────────────────────────────────────────────────────
+async def vip_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """⭐ /vip — VIP durumu ve bilgileri"""
+    c = cfg()
+    uid = str(update.effective_user.id)
+    isim = update.effective_user.first_name
+    bakiye = get_bakiye(c, uid)
+    esik = c.get("vip_esik", 10000)
+    carpan = c.get("vip_carpan", 1.5)
+    vip = is_vip(c, uid)
+    if vip:
+        await update.message.reply_text(
+            f"⭐ <b>VIP Üye</b>\n\n"
+            f"Tebrikler {isim}! VIP statüsündesin.\n\n"
+            f"🎯 Avantajlar:\n"
+            f"  • Casino kazançlarında <b>{carpan}x çarpan</b>\n"
+            f"  • Özel VIP rozeti 💎\n"
+            f"  • Öncelikli destek\n\n"
+            f"💰 Mevcut bakiye: <b>{bakiye:,}</b> puan",
+            parse_mode="HTML")
+    else:
+        kalan = max(0, esik - bakiye)
+        bar_dolu = min(10, int((bakiye / esik) * 10))
+        bar = "█" * bar_dolu + "░" * (10 - bar_dolu)
+        await update.message.reply_text(
+            f"⭐ <b>VIP Sistemi</b>\n\n"
+            f"VIP olmak için <b>{esik:,}</b> puana ihtiyacın var.\n\n"
+            f"[{bar}] {int((bakiye/esik)*100)}%\n"
+            f"💰 Bakiye: {bakiye:,} / {esik:,}\n"
+            f"📍 Kalan: <b>{kalan:,}</b> puan\n\n"
+            f"🎯 VIP avantajları:\n"
+            f"  • {carpan}x casino çarpanı\n"
+            f"  • 💎 Elmas rozet\n"
+            f"  • Özel komutlara erişim",
+            parse_mode="HTML")
+
+# ── /bildirim ─────────────────────────────────────────────────
+async def bildirim_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """🔔 /bildirim — DM bildirimlerini aç/kapat"""
+    c = cfg()
+    uid = str(update.effective_user.id)
+    kullanicilar = c.get("kullanicilar", {})
+    mevcut = kullanicilar.get(uid, {}).get("dm_ok", True)
+    yeni = not mevcut
+    if uid in kullanicilar:
+        kullanicilar[uid]["dm_ok"] = yeni
+    else:
+        kullanicilar[uid] = {"isim": update.effective_user.first_name, "dm_ok": yeni}
+    save(c)
+    durum = "🔔 Açık" if yeni else "🔕 Kapalı"
+    await update.message.reply_text(
+        f"{'🔔' if yeni else '🔕'} DM bildirimleri: <b>{durum}</b>\n\n"
+        f"{'Casino sonuçları, bonus ve etkinlik bildirimlerini DM\'den alacaksın.' if yeni else 'Artık DM bildirimi almayacaksın.'}",
+        parse_mode="HTML")
+
+# ── /kelime (Kelime Zinciri Oyunu) ───────────────────────────
+async def kelime_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """🔤 /kelime — Kelime zinciri oyunu başlat"""
+    c = cfg()
+    if not c.get("bakiye_aktif"): return
+    chat_id = str(update.effective_chat.id)
+    kelime_oyunlari = c.setdefault("kelime_oyunlari", {})
+    if chat_id in kelime_oyunlari:
+        oyun = kelime_oyunlari[chat_id]
+        son = oyun.get("son_kelime", "?")
+        return await update.message.reply_text(
+            f"🔤 Kelime zinciri aktif!\n"
+            f"Son kelime: <b>{son}</b>\n"
+            f"<b>{son[-1].upper()}</b> harfiyle başlayan Türkçe kelime yaz!",
+            parse_mode="HTML")
+    kelime_oyunlari[chat_id] = {
+        "aktif": True, "son_kelime": "kelime",
+        "kullanilan": ["kelime"], "skor": {},
+        "isimler": {},
+    }
+    save(c)
+    await update.message.reply_text(
+        f"🔤 <b>Kelime Zinciri Oyunu Başladı!</b>\n\n"
+        f"Kural: Her kelime bir öncekinin <b>son harfiyle</b> başlamalı!\n"
+        f"Doğru kelime: <b>+10 puan</b>\n"
+        f"Oyunu bitirmek için: /kelime_bitir\n\n"
+        f"İlk kelime: <b>KELİME</b>\n"
+        f"<b>E</b> harfiyle başlayan kelime yaz! 👇",
+        parse_mode="HTML")
+
+async def kelime_mesaj_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Kelime zinciri oyununda gelen mesajları kontrol et"""
+    c = cfg()
+    chat_id = str(update.effective_chat.id)
+    kelime_oyunlari = c.get("kelime_oyunlari", {})
+    if chat_id not in kelime_oyunlari: return False
+    oyun = kelime_oyunlari[chat_id]
+    if not oyun.get("aktif"): return False
+    uid = str(update.effective_user.id)
+    isim = update.effective_user.first_name
+    metin = (update.message.text or "").strip().lower()
+    if len(metin) < 2 or not metin.isalpha(): return False
+    son = oyun["son_kelime"]
+    beklenen_harf = son[-1]
+    if metin[0] != beklenen_harf:
+        return False  # sessizce geç
+    if metin in oyun["kullanilan"]:
+        await update.message.reply_text(f"❌ <b>{metin}</b> daha önce kullanıldı!", parse_mode="HTML")
+        return True
+    # Geçerli kelime
+    odul = 10
+    oyun["son_kelime"] = metin
+    oyun["kullanilan"].append(metin)
+    oyun["skor"][uid] = oyun["skor"].get(uid, 0) + odul
+    oyun["isimler"][uid] = isim
+    add_puan(c, uid, isim, odul)
+    c["kelime_oyunlari"] = kelime_oyunlari
+    save(c)
+    await update.message.reply_text(
+        f"✅ <b>{metin.upper()}</b> +{odul}p\n"
+        f"Sıra: <b>{metin[-1].upper()}</b> harfiyle devam!",
+        parse_mode="HTML")
+    return True
+
+async def kelime_bitir_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin veya herkes: /kelime_bitir"""
+    c = cfg()
+    chat_id = str(update.effective_chat.id)
+    kelime_oyunlari = c.get("kelime_oyunlari", {})
+    if chat_id not in kelime_oyunlari:
+        return await update.message.reply_text("Aktif kelime oyunu yok.")
+    oyun = kelime_oyunlari[chat_id]
+    skor = oyun.get("skor", {})
+    isimler = oyun.get("isimler", {})
+    del kelime_oyunlari[chat_id]
+    c["kelime_oyunlari"] = kelime_oyunlari
+    save(c)
+    if not skor:
+        return await update.message.reply_text("🔤 Kelime oyunu bitti! Kimse oynamadı.")
+    sirali = sorted(skor.items(), key=lambda x: x[1], reverse=True)
+    madalya = ["🥇","🥈","🥉"]
+    metin = "🔤 <b>Kelime Zinciri Bitti!</b>\n\n"
+    for i, (uid, p) in enumerate(sirali[:5]):
+        icon = madalya[i] if i < 3 else f"{i+1}."
+        metin += f"{icon} {isimler.get(uid,'?')} — <b>{p} puan</b>\n"
+    await update.message.reply_text(metin, parse_mode="HTML")
+
+# ── FLOOD KONTROL ─────────────────────────────────────────────
+async def flood_kontrol(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """True dönerse mesaj flood, işleme devam etme"""
+    c = cfg()
+    if not c.get("flood_aktif", False): return False
+    uid = str(update.effective_user.id)
+    if is_admin(int(uid)): return False
+    simdi = _time.time()
+    flood_limit = c.get("flood_limit", 5)
+    flood_sure = c.get("flood_sure", 5)
+    kayitlar = c.setdefault("flood_sayac", {})
+    gecmis = [t for t in kayitlar.get(uid, []) if simdi - t < flood_sure]
+    gecmis.append(simdi)
+    kayitlar[uid] = gecmis
+    if len(gecmis) > flood_limit:
+        try:
+            await context.bot.restrict_chat_member(
+                update.effective_chat.id, int(uid),
+                permissions=ChatPermissions(can_send_messages=False),
+                until_date=int(simdi) + 60
+            )
+            await update.message.reply_text(
+                f"⚠️ {update.effective_user.first_name} flood yaptı! 1 dakika susturuldu.")
+        except: pass
+        return True
+    return False
+
+# ── GÜNLÜK İSTATİSTİK JOB ─────────────────────────────────────
+async def gunluk_istat_job(context: ContextTypes.DEFAULT_TYPE):
+    """Her gece 23:00'de günlük özet gönder"""
+    c = cfg()
+    stats = c.get("stats", {})
+    bakiyeler = c.get("bakiyeler", {})
+    casino_bugun = stats.get("casino_oyun", 0)
+    toplam_uye = len(bakiyeler)
+    jackpot = c.get("jackpot_havuz", 0)
+    sirali = sorted([(v.get("bakiye",0), v.get("isim","?"))
+                     for v in bakiyeler.values() if isinstance(v,dict)],
+                    reverse=True)[:3]
+    top_str = "\n".join([f"  {['🥇','🥈','🥉'][i]} {isim}: {b:,}p"
+                         for i,(b,isim) in enumerate(sirali)])
+    ozet = (
+        f"📊 <b>Günlük Özet</b>\n\n"
+        f"👥 Toplam üye: {toplam_uye}\n"
+        f"🎰 Bugün casino: {casino_bugun}\n"
+        f"💎 Jackpot havuz: {jackpot:,}p\n\n"
+        f"🏆 Liderler:\n{top_str}"
+    )
+    for kanal in c.get("kanallar", []):
+        kid = kanal.split("|")[0].strip()
+        try:
+            await context.bot.send_message(kid, ozet, parse_mode="HTML")
+        except: pass
+
+# ── /ping & /uptime ───────────────────────────────────────────
+_BOT_BASLANGIC = _time.time()
+
+async def ping_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """🏓 /ping — Bot gecikme testi"""
+    import datetime as _dt
+    t1 = _time.time()
+    msg = await update.message.reply_text("🏓 Pong!")
+    t2 = _time.time()
+    ms = int((t2-t1)*1000)
+    sure = int(_time.time() - _BOT_BASLANGIC)
+    saat = sure // 3600; dakika = (sure % 3600) // 60
+    await msg.edit_text(
+        f"🏓 <b>Pong!</b>\n\n"
+        f"⚡ Gecikme: <b>{ms}ms</b>\n"
+        f"⏱ Uptime: <b>{saat}s {dakika}dk</b>",
+        parse_mode="HTML")
+
+# ── /kazan (günlük mini görev) ────────────────────────────────
+async def kazan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/kazan — Reklam izle / mini görev (günlük 3 hak)"""
+    c = cfg()
+    if not c.get("bakiye_aktif"): return
+    uid = str(update.effective_user.id)
+    isim = update.effective_user.first_name
+    bugun = datetime.now().strftime("%Y-%m-%d")
+    kayit = c.setdefault("kazan_kayit", {}).get(uid, {})
+    if kayit.get("tarih") == bugun and kayit.get("sayi", 0) >= 3:
+        return await update.message.reply_text(
+            f"⏰ Bugünkü 3 hakkını kullandın!\n"
+            f"Yarın tekrar gel. 🌙", parse_mode="HTML")
+    odul = random.randint(20, 80)
+    sayi = kayit.get("sayi", 0) + 1 if kayit.get("tarih") == bugun else 1
+    c["kazan_kayit"][uid] = {"tarih": bugun, "sayi": sayi}
+    add_puan(c, uid, isim, odul)
+    save(c)
+    kalan = 3 - sayi
+    await update.message.reply_text(
+        f"🎁 <b>Mini Görev Tamamlandı!</b>\n\n"
+        f"➕ <b>+{odul} puan</b> kazandın!\n"
+        f"📍 Bugün kalan hak: {kalan}/3",
+        parse_mode="HTML")
+
+
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
@@ -4337,6 +4741,16 @@ def main():
     # ── Kasayla BJ ──
     app.add_handler(CommandHandler("bj",            kbj_cmd))
     app.add_handler(CommandHandler("blackjack",     kbj_cmd))
+    # ── Eksik Özellikler ──
+    app.add_handler(CommandHandler("temizle",       temizle_cmd))
+    app.add_handler(CommandHandler("istat",         istatistik_cmd))
+    app.add_handler(CommandHandler("cekilis",       cekilis_cmd))
+    app.add_handler(CommandHandler("vip",           vip_cmd))
+    app.add_handler(CommandHandler("bildirim",      bildirim_cmd))
+    app.add_handler(CommandHandler("kelime",        kelime_cmd))
+    app.add_handler(CommandHandler("kelime_bitir",  kelime_bitir_cmd))
+    app.add_handler(CommandHandler("ping",          ping_cmd))
+    app.add_handler(CommandHandler("kazan",         kazan_cmd))
     app.add_handler(CommandHandler("transfer",transfer_cmd))
     app.add_handler(CommandHandler("top",     top_cmd))
     app.add_handler(CommandHandler("ref",     ref_cmd))
@@ -4374,6 +4788,7 @@ def main():
     app.add_handler(CommandHandler("ton",    ton_cmd))
 
     # Handlers
+    app.add_handler(CallbackQueryHandler(cekilis_cb,    pattern="^cekilis_"))
     app.add_handler(CallbackQueryHandler(duello_cb,     pattern="^duello_"))
     app.add_handler(CallbackQueryHandler(jackpot_cb,    pattern="^jackpot_"))
     app.add_handler(CallbackQueryHandler(kbj_cb,        pattern="^kbj_"))
@@ -4387,6 +4802,8 @@ def main():
     # Jobs
     app.job_queue.run_repeating(oto_job, interval=3600, first=60)
     app.job_queue.run_repeating(rss_job, interval=3600, first=120)
+    # Günlük İstatistik
+    app.job_queue.run_daily(gunluk_istat_job, time=datetime.strptime("23:00","%H:%M").time())
     # Futbol API Jobs
     app.job_queue.run_daily(futbol_gunluk_cek_job, time=datetime.strptime("07:00","%H:%M").time())
     app.job_queue.run_repeating(futbol_canli_job, interval=180, first=60)  # Her 3 dk
