@@ -2434,55 +2434,158 @@ async def seviye_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def yardim_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     c = cfg()
     uid = update.effective_user.id
+
+    # ── ADMİN ──
     if is_admin(uid):
         await update.message.reply_text(
-            "<b>Admin Komutlari</b>\n\n"
-            "/panel — Admin paneli\n"
-            "/ver [id] [miktar] — Puan ver\n"
-            "/al [id] [miktar] — Puan al\n"
-            "/carpan [sayi] — Puan carpani\n"
-            "/dm [mesaj] — Toplu DM\n"
-            "/duyuru [mesaj] — Duyuru at\n"
-            "/etkinlik cift_puan 2 — Cift puan\n"
-            "/dm_listesi — Kullanici listesi",
+            "<b>🔧 Admin Komutlari</b>\n\n"
+            "<b>Puan Yonetimi</b>\n"
+            "/ver [user_id] [miktar] — Puan ver\n"
+            "/al [user_id] [miktar] — Puan al\n"
+            "/carpan [sayi] — Carpan ayarla (2.0=cift puan)\n"
+            "/sifirla [user_id] — Kullanici bakiyesini sifirla\n\n"
+            "<b>Duyuru & DM</b>\n"
+            "/dm [mesaj] — Tum uyelere DM\n"
+            "/dm_filtre vip [mesaj] — Sadece VIP'lere\n"
+            "/dm_filtre aktif [mesaj] — Son 7 gun aktif\n"
+            "/dm_filtre sev5 [mesaj] — Seviye 5+ uyelere\n"
+            "/dm_listesi — Kayitli kullanici listesi\n"
+            "/duyuru [mesaj] — Kanal + DM duyuru\n"
+            "/etkinlik cift_puan 2 — 2 saat cift puan\n"
+            "/etkinlik yarisme — Puan yarisma duyurusu\n\n"
+            "<b>Admin Paneli</b>\n"
+            "/panel — Ana yonetim paneli\n\n"
+            "<b>Moderasyon</b>\n"
+            "/warn @kullanici — Uyari ver\n"
+            "/ban @kullanici — Banla\n"
+            "/kick @kullanici — Kickle\n"
+            "/mute @kullanici [dakika] — Sustur\n"
+            "/unmute @kullanici — Sesi ac",
             parse_mode="HTML"
         )
         return
+
+    # ── ÜYE — Bölüm 1: Bakiye & Profil ──
     cmin = c.get("casino_min_bahis", 10)
     cmax = c.get("casino_max_bahis", 1000)
     gunluk = c.get("gunluk_bonus", 100)
     haftalik = c.get("haftalik_bonus", 500)
     ref_odul = c.get("ref_odul", 10)
     aktiflik = c.get("aktiflik_puan", 2)
-    await update.message.reply_text(
-        "<b>Komutlar Rehberi</b>\n\n"
-        "<b>Bakiye & Puan</b>\n"
-        f"/bakiye — Puanin ve seviyen\n"
-        f"/profil — Tam profilin\n"
-        f"/bonus — Gunluk +{gunluk} puan (seri ile artar)\n"
-        f"/hbonus — Haftalik +{haftalik} puan\n"
-        "/seviye — Seviye tablosu\n"
-        "/top — Liderlik tablosu\n"
-        "/transfer [miktar] — Puan gonder\n\n"
-        "<b>Gorev & Market</b>\n"
+
+    msg1 = (
+        "🤖 <b>BOT KOMUTLARI REHBERİ</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "💰 <b>BAKİYE & PROFİL</b>\n"
+        "/bakiye — Puanin, seviyen, ilerleme cubugu\n"
+        "/profil (veya /p) — Tam profilin: basarimlar, gorevler\n"
+        f"/bonus — Gunluk bonus (seri ile {gunluk}→220 puan)\n"
+        f"/hbonus — Haftalik +{haftalik} puan (Pzt sifirlanir)\n"
+        "/seviye — Seviye tablosu (Lv1-Lv10)\n"
+        "/top — Liderlik tablosu (VIP+rozet bilgisi)\n"
+        "/transfer [miktar] — Puan gonder (mesaja yanit ver)\n\n"
+        "🔥 <b>GÜNLük SERİ SİSTEMİ</b>\n"
+        "Her gun /bonus kullan, seri kırma!\n"
+        "1.gun +100 | 2.gun +120 | 3.gun +140\n"
+        "4.gun +160 | 5.gun +180 | 6.gun +200\n"
+        "7.gun +220 puan (MAKSIMUM)\n"
+        "⚠️ Bir gun atlayinca seri sifirlanir!\n\n"
+        "⭐ <b>SEVİYE SİSTEMİ</b>\n"
+        "Lv1 🌱 0p | Lv2 🔰 500p | Lv3 ⚔️ 1.500p\n"
+        "Lv4 🛡 3.000p | Lv5 ⭐ 6.000p | Lv6 💫 10.000p\n"
+        "Lv7 🔥 20.000p | Lv8 💎 35.000p\n"
+        "Lv9 👑 50.000p | Lv10 🌌 75.000p\n"
+        "👑 10.000p = VIP → Tum kazanimlar +%50!"
+    )
+
+    msg2 = (
+        "📋 <b>GÖREV MERKEZİ</b> → /gorev\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "<b>Tek Seferlik Gorevler</b>\n"
+        "🎉 Hosgeldin — /start yaz → +200p\n"
+        "🎮 Kumar Kapisi — Ilk oyun → +100p\n"
+        "🏆 Ilk Zafer — Bir oyunda kazan → +150p\n"
+        "🤝 Sosyal Kelebek — 1 kisi davet et → +250p\n"
+        "🌟 Topluluk Kurucusu — 5 kisi davet → +500p\n"
+        "👑 VIP Kulubu — 10.000 puana ulaş → +300p\n"
+        "⭐ Orta Yol — Seviye 5 → +200p\n"
+        "💎 Efsane — Seviye 10 → +1.000p\n\n"
+        "<b>Gunluk Gorevler</b> (her gun sifirlanir)\n"
+        "📅 /bonus al → Otomatik\n"
+        "💬 Grupta 5 mesaj at → +10p\n"
+        "🎲 3 oyun oyna → +25p\n"
+        "🤑 Bir oyunda kazan → +50p\n\n"
+        "<b>Haftalik Gorevler</b> (Pzt sifirlanir)\n"
+        "🗓 /hbonus al → Otomatik\n"
+        "🥇 Liderlikte top 3 → +500p\n"
+        "🔥 7 gunluk seri → +300p\n\n"
+        "🏅 <b>BAŞARIMLAR</b> (profilinde gorunur)\n"
+        "🍀 Sansli — 3 kez ust uste kazan\n"
+        "⚡ Cesur — Tek seferde 500+ p kazan\n"
+        "❤️ Fedakar — 100+ p transfer et\n"
+        "🗝 Koleksiyoner — Marketten 3 urun al"
+    )
+
+    msg3 = (
+        "🎰 <b>CASİNO OYUNLARI</b> (16 oyun!)\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Min: {cmin}p | Maks: {cmax:,}p\n\n"
+        "/zar [bahis] — 🎲 Zar (2x)\n"
+        "/tura [bahis] yazi|tura — 🪙 Yazi tura (2x)\n"
+        "/slot [bahis] — 🎰 Slot (7️⃣=10x, 💎=5x)\n"
+        "/rulet [bahis] [0-36/k/s] — 🎡 Rulet (35x)\n"
+        "/balik [bahis] — 🎣 Balik avi (🦈=5x)\n"
+        "/mines [bahis] [1-5] — 💣 Mayin tarlasi\n"
+        "/tahmin [bahis] [1-10] — 🔢 Sayi tahmin (8x)\n"
+        "/kart [bahis] — 🃏 Kart oyunu (2x)\n"
+        "/ya [bahis] yuksek|alcak — 📊 Y/A (1.8x)\n"
+        "/tombala [bahis] — 🎱 Tombala (10x)\n"
+        "/savas [bahis] — ⚔️ Kullanici savasi\n"
+        "/hediye [bahis] — 🎁 Hediye kutusu\n"
+        "/bowling [bahis] — 🎳 Bowling (3x)\n"
+        "/dart [bahis] — 🎯 Dart (5x)\n"
+        "/basketbol [bahis] — 🏀 Basketbol\n"
+        "/penalti [bahis] sol|orta|sag — ⚽ Penalti\n\n"
+        "🛒 <b>PUAN MARKETİ</b> → /market\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n"
+        "👑 VIP Rozet (30g) → 2.000p\n"
+        "🥇 Altin Rozet (+%10) → 5.000p\n"
+        "💎 Elmas Rozet (+%25) → 15.000p\n"
+        "🏷 Ozel Unvan → 1.000p\n"
+        "⚡ Grup Lideri (1hf) → 3.000p\n"
+        "📌 Mesaj Pinleme → 500p\n"
+        "⚡ 2x Puan (1gun) → 800p\n"
+        "🎰 Ekstra Casino Spini → 200p\n"
+        "🛡 Ban Kalkan (7gun) → 2.500p\n"
+        "🧹 Uyari Sil → 1.500p\n"
+        "Satin almak: /satin [urun_kodu]"
+    )
+
+    msg4 = (
+        "💡 <b>HIZLI PUAN STRATEJISI</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "1️⃣ Her gun /bonus — seri kırma (max 220p)\n"
+        "2️⃣ Her Pzt /hbonus — ucretsiz 500p\n"
+        f"3️⃣ Aktif ol — her mesaj {aktiflik}p (dk/1)\n"
+        f"4️⃣ /ref ile davet — her kisi {ref_odul}p\n"
+        "5️⃣ /gorev — kolay 1.000+ bedava puan\n"
+        "6️⃣ Casino — kazanirsan buyuk puan!\n"
+        "7️⃣ VIP ol (10.000p) → +%50 her kazanim!\n\n"
+        "🚀 En hizli yol: /bonus → /hbonus → /gorev → /ref → Casino!\n\n"
+        "📊 <b>DİĞER KOMUTLAR</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n"
+        "/ref — Davet linki al\n"
         "/gorev — Gorev merkezi\n"
         "/market — Puan marketi\n"
-        f"/ref — Davet linki (+{ref_odul} puan/kisi)\n\n"
-        "<b>Casino</b>\n"
-        f"Min: {cmin} | Maks: {cmax:,} puan\n"
-        "/zar /slot /rulet /balik /mines\n"
-        "/tahmin /kart /ya /tombala /savas\n"
-        "/bowling /dart /basketbol /penalti\n\n"
-        f"<b>Puan Kazan</b>\n"
-        f"• Mesaj: {aktiflik} puan/dk\n"
-        "• /bonus (gunluk seri)\n"
-        "• /hbonus (haftalik)\n"
-        "• /gorev (gorevler)\n"
-        "• Casino kazanci\n"
-        "• Arkadaslarini davet et\n\n"
-        "/kurallar | /destek [mesaj] | /btc /eth /ton",
-        parse_mode="HTML"
+        "/kurallar — Grup kurallari\n"
+        "/destek [mesaj] — Destek talebi\n"
+        "/btc /eth /ton — Kripto fiyatlari\n"
+        "/kripto [sembol] — Herhangi kripto\n\n"
+        "📌 Tam rehber icin grubun sabit mesajina bak!"
     )
+
+    for msg in [msg1, msg2, msg3, msg4]:
+        await update.message.reply_text(msg, parse_mode="HTML")
 
 
 async def carpan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2683,6 +2786,227 @@ async def mesaj_handler_v2(update: Update, context: ContextTypes.DEFAULT_TYPE):
 #  MAIN
 # ══════════════════════════════════════════════════════════════
 
+async def rehber_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Interaktif komut rehberi — inline butonlu kategori menüsü"""
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("💰 Bakiye & Puan",   callback_data="rehber_bakiye"),
+         InlineKeyboardButton("⭐ Seviye & VIP",    callback_data="rehber_seviye")],
+        [InlineKeyboardButton("📋 Görevler",         callback_data="rehber_gorev"),
+         InlineKeyboardButton("🏅 Başarımlar",       callback_data="rehber_basarim")],
+        [InlineKeyboardButton("🎰 Casino (16 oyun)", callback_data="rehber_casino")],
+        [InlineKeyboardButton("🛒 Puan Marketi",     callback_data="rehber_market"),
+         InlineKeyboardButton("💡 Strateji",         callback_data="rehber_strateji")],
+        [InlineKeyboardButton("🔥 Seri Sistemi",     callback_data="rehber_seri"),
+         InlineKeyboardButton("📊 Diğer Komutlar",  callback_data="rehber_diger")],
+    ])
+    c = cfg()
+    b = get_bakiye(c, str(update.effective_user.id))
+    sev = hesapla_seviye(c, b["puan"])
+    rozet = rozet_al(c, str(update.effective_user.id))
+    await update.message.reply_text(
+        f"{rozet} <b>Merhaba {update.effective_user.first_name}!</b>\n"
+        f"Seviye {sev} | {b['puan']:,} puan\n\n"
+        "<b>📖 Komut Rehberi</b>\n"
+        "Aşağıdan bir kategori seç:",
+        parse_mode="HTML",
+        reply_markup=kb
+    )
+
+REHBER_ICERIK = {
+    "rehber_bakiye": (
+        "💰 <b>BAKİYE & PROFİL</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "/bakiye — Puanın, seviyen, ilerleme çubuğu\n"
+        "/profil (veya /p) — Tam profilin: başarımlar, davet, istatistik\n"
+        "/bonus — Günlük bonus (seri ile 220p'ye kadar çıkar)\n"
+        "/hbonus — Haftalık +500 puan (Pazartesi sıfırlanır)\n"
+        "/seviye — Tüm seviye eşikleri tablosu\n"
+        "/top — Liderlik tablosu (VIP + rozet bilgisi ile)\n"
+        "/transfer [miktar] — Birine puan gönder (mesajına yanıt ver)\n\n"
+        "💡 <i>Her gün /bonus + /hbonus = haftada 1.900+ bedava puan!</i>"
+    ),
+    "rehber_seviye": (
+        "⭐ <b>SEVİYE SİSTEMİ</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "🌱 Lv1 Çaylak      →  0 puan\n"
+        "🔰 Lv2 Acemi        →  500 puan\n"
+        "⚔️  Lv3 Savaşçı    →  1.500 puan\n"
+        "🛡  Lv4 Kahraman   →  3.000 puan\n"
+        "⭐ Lv5 Usta         →  6.000 puan\n"
+        "💫 Lv6 Şampiyon    →  10.000 puan\n"
+        "🔥 Lv7 Efsane       →  20.000 puan\n"
+        "💎 Lv8 Elmas        →  35.000 puan\n"
+        "👑 Lv9 Kral         →  50.000 puan\n"
+        "🌌 Lv10 Tanrı       →  75.000 puan\n\n"
+        "👑 <b>10.000 puan = VIP!</b>\n"
+        "VIP olunca tüm kazanımların <b>+%50 bonus</b> alır!\n\n"
+        "💡 <i>Seviyeni görmek için: /bakiye veya /profil</i>"
+    ),
+    "rehber_gorev": (
+        "📋 <b>GÖREV MERKEZİ</b>  →  /gorev\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "<b>🔵 Tek Seferlik (kalıcı ödül)</b>\n"
+        "🎉 Hoşgeldin — /start yaz → +200p\n"
+        "🎮 Kumar Kapısı — İlk oyun → +100p\n"
+        "🏆 İlk Zafer — Oyunda kazan → +150p\n"
+        "🤝 Sosyal Kelebek — 1 davet → +250p\n"
+        "🌟 Topluluk Kurucusu — 5 davet → +500p\n"
+        "👑 VIP Kulübü — 10.000p ulaş → +300p\n"
+        "⭐ Orta Yol — Seviye 5 → +200p\n"
+        "💎 Efsane — Seviye 10 → +1.000p\n\n"
+        "<b>🟡 Günlük (her gün sıfırlanır)</b>\n"
+        "📅 /bonus al → Otomatik\n"
+        "💬 Grupta 5 mesaj at → +10p\n"
+        "🎲 3 oyun oyna → +25p\n"
+        "🤑 Bir oyunda kazan → +50p\n\n"
+        "<b>🟢 Haftalık (Pazartesi sıfırlanır)</b>\n"
+        "🗓 /hbonus al → Otomatik\n"
+        "🥇 Liderlikte top 3 → +500p\n"
+        "🔥 7 günlük seri yap → +300p"
+    ),
+    "rehber_basarim": (
+        "🏅 <b>BAŞARIMLAR</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "Özel koşullarla kazanılır, profilinde kalıcı görünür!\n\n"
+        "🍀 <b>Şanslı</b>\n"
+        "   Aynı oyunda 3 kez üst üste kazan\n\n"
+        "⚡ <b>Cesur</b>\n"
+        "   Tek seferde 500+ puan kazan\n\n"
+        "❤️ <b>Fedakar</b>\n"
+        "   100+ puan transfer et\n\n"
+        "🗝 <b>Koleksiyoner</b>\n"
+        "   Marketten 3 farklı ürün al\n\n"
+        "💡 <i>Başarımlarını görmek için: /profil</i>"
+    ),
+    "rehber_casino": (
+        "🎰 <b>CASİNO OYUNLARI</b> (16 oyun)\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "/zar [b]           🎲 Zar at           → 2x\n"
+        "/tura [b] y|t      🪙 Yazı tura        → 2x\n"
+        "/slot [b]          🎰 Slot             → 10x\n"
+        "/rulet [b] [0-36]  🎡 Rulet            → 35x\n"
+        "/balik [b]         🎣 Balık avı        → 5x\n"
+        "/mines [b] [1-5]   💣 Mayın tarlası   → değişken\n"
+        "/tahmin [b] [1-10] 🔢 Sayı tahmin     → 8x\n"
+        "/kart [b]          🃏 Kart oyunu       → 2x\n"
+        "/ya [b] y|a        📊 Yüksek/Alçak    → 1.8x\n"
+        "/tombala [b]       🎱 Tombala          → 10x\n"
+        "/savas [b]         ⚔️  Kullanıcı savaşı\n"
+        "/hediye [b]        🎁 Hediye kutusu\n"
+        "/bowling [b]       🎳 Bowling          → 3x\n"
+        "/dart [b]          🎯 Dart             → 5x\n"
+        "/basketbol [b]     🏀 Basketbol\n"
+        "/penalti [b] s|o|g ⚽ Penaltı         → 1.5x\n\n"
+        "<i>[b] = bahis miktarı (puan)</i>"
+    ),
+    "rehber_market": (
+        "🛒 <b>PUAN MARKETİ</b>  →  /market\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "<b>🏆 Rozetler</b>\n"
+        "👑 VIP Rozet (30 gün)      →  2.000p\n"
+        "🥇 Altın Rozet (+%10)      →  5.000p\n"
+        "💎 Elmas Rozet (+%25)      →  15.000p\n\n"
+        "<b>🏷 Unvanlar</b>\n"
+        "🏷 Özel Ünvan              →  1.000p\n"
+        "⚡ Grup Lideri (1 hafta)   →  3.000p\n\n"
+        "<b>⚡ Ayrıcalıklar</b>\n"
+        "📌 Mesaj Pinleme (24s)     →  500p\n"
+        "⚡ 2x Puan (1 gün)        →  800p\n"
+        "🎰 Ekstra Casino Spini    →  200p\n\n"
+        "<b>🛡 Korumalar</b>\n"
+        "🛡 Ban Kalkan (7 gün)      →  2.500p\n"
+        "🧹 Uyarı Sil (1 adet)     →  1.500p\n\n"
+        "Satın almak için: /satin [urun_kodu]"
+    ),
+    "rehber_strateji": (
+        "💡 <b>HIZLI PUAN STRATEJİSİ</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "1️⃣ Her gün <b>/bonus</b> yaz\n"
+        "   Seri kırma → 7. günde 220 puan!\n\n"
+        "2️⃣ Her Pazartesi <b>/hbonus</b> yaz\n"
+        "   Ücretsiz +500 puan\n\n"
+        "3️⃣ Grupta <b>aktif ol</b>\n"
+        "   Her mesaj = 2 puan (dakikada 1 kez)\n\n"
+        "4️⃣ <b>/ref</b> ile arkadaş davet et\n"
+        "   Her kişi başı +10 puan\n\n"
+        "5️⃣ <b>/gorev</b> sayfasını kontrol et\n"
+        "   Bedava 1.000+ puan kazanabilirsin\n\n"
+        "6️⃣ <b>Casino</b> oyna\n"
+        "   Kazanırsan büyük puan!\n\n"
+        "7️⃣ <b>VIP</b> ol (10.000 puan)\n"
+        "   Tüm kazanımlar +%50 daha fazla!\n\n"
+        "🚀 <b>Formül:</b> /bonus → /hbonus → /gorev → /ref → Casino!"
+    ),
+    "rehber_seri": (
+        "🔥 <b>GÜNLük SERİ SİSTEMİ</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "Her gün /bonus kullan, seri bonusu katlanır!\n\n"
+        "🔥 1. gün  →  +100 puan\n"
+        "🔥 2. gün  →  +120 puan  (+20 ekstra)\n"
+        "🔥 3. gün  →  +140 puan  (+40 ekstra)\n"
+        "🔥 4. gün  →  +160 puan  (+60 ekstra)\n"
+        "🔥 5. gün  →  +180 puan  (+80 ekstra)\n"
+        "🔥 6. gün  →  +200 puan  (+100 ekstra)\n"
+        "🔥 7. gün  →  +220 puan  (MAKSİMUM!)\n\n"
+        "⚠️ <b>Bir gün atlayınca seri sıfırlanır!</b>\n\n"
+        "Serinle haftalık görev de tamamlanır:\n"
+        "7 günlük seri → +300 ekstra puan!\n\n"
+        "💡 <i>Serinizi /bakiye komutuyla kontrol edebilirsin</i>"
+    ),
+    "rehber_diger": (
+        "📊 <b>DİĞER KOMUTLAR</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "<b>Topluluk</b>\n"
+        "/ref — Kişisel davet linki al\n"
+        "/kurallar — Grup kuralları\n"
+        "/destek [mesaj] — Admin'e destek talebi\n\n"
+        "<b>Kripto Fiyatları</b>\n"
+        "/btc — Bitcoin fiyatı\n"
+        "/eth — Ethereum fiyatı\n"
+        "/ton — TON fiyatı\n"
+        "/kripto [sembol] — Herhangi bir kripto\n\n"
+        "<b>Kısayollar</b>\n"
+        "/p — /profil kısayolu\n"
+        "/yardim veya /help — Bu rehber\n"
+        "/rehber — İnteraktif rehber (bu menü)\n\n"
+        "💡 <i>Sorun mu var? /destek [mesaj] ile bize ulaş!</i>"
+    ),
+}
+
+async def rehber_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Rehber inline buton callback'leri"""
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    if data == "rehber_ana":
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("💰 Bakiye & Puan",   callback_data="rehber_bakiye"),
+             InlineKeyboardButton("⭐ Seviye & VIP",    callback_data="rehber_seviye")],
+            [InlineKeyboardButton("📋 Görevler",         callback_data="rehber_gorev"),
+             InlineKeyboardButton("🏅 Başarımlar",       callback_data="rehber_basarim")],
+            [InlineKeyboardButton("🎰 Casino (16 oyun)", callback_data="rehber_casino")],
+            [InlineKeyboardButton("🛒 Puan Marketi",     callback_data="rehber_market"),
+             InlineKeyboardButton("💡 Strateji",         callback_data="rehber_strateji")],
+            [InlineKeyboardButton("🔥 Seri Sistemi",     callback_data="rehber_seri"),
+             InlineKeyboardButton("📊 Diğer Komutlar",  callback_data="rehber_diger")],
+        ])
+        await query.edit_message_text(
+            "<b>📖 Komut Rehberi</b>\nKategori seç:",
+            parse_mode="HTML", reply_markup=kb
+        )
+        return
+    if data not in REHBER_ICERIK:
+        return
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("◀️ Ana Menü", callback_data="rehber_ana")
+    ]])
+    await query.edit_message_text(
+        REHBER_ICERIK[data],
+        parse_mode="HTML",
+        reply_markup=kb
+    )
+
+
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
@@ -2720,6 +3044,7 @@ def main():
     app.add_handler(CommandHandler("carpan",  carpan_cmd))
     app.add_handler(CommandHandler("profil",  profil_cmd))
     app.add_handler(CommandHandler("p",       profil_cmd))
+    app.add_handler(CommandHandler("rehber",    rehber_cmd))
     app.add_handler(CommandHandler("dm",          dm_cmd))
     app.add_handler(CommandHandler("dm_filtre",   dm_filtre_cmd))
     app.add_handler(CommandHandler("dm_listesi",  dm_listesi_cmd))
@@ -2762,6 +3087,7 @@ def main():
     app.add_handler(CommandHandler("ton",    ton_cmd))
 
     # Handlers
+    app.add_handler(CallbackQueryHandler(rehber_cb, pattern="^rehber_"))
     app.add_handler(CallbackQueryHandler(cb_v2))
     app.add_handler(ChatJoinRequestHandler(join_handler))
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, yeni_uye))
