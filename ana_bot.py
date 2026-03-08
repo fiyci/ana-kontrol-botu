@@ -67,6 +67,8 @@ DEFAULT = {
     "ref_odul": 10,          # davet başına puan
     "ref_kayitlar": {},      # {davet_eden: [davet_edilen...]}
     # ── BAKİYE & PUAN ──
+    "kullanicilar": {},       # {uid: {isim, username, giris, son_aktif, dm_ok}}
+    "toplu_mesaj_aktif": True,
     "bakiye_aktif": True,
     "bakiyeler": {},
     "gunluk_bonus": 100,
@@ -117,6 +119,25 @@ def save(c):
 def is_admin(uid):
     return uid in cfg().get("adminler", [])
 
+def kaydet_kullanici(c, user):
+    """Botla etkileşime giren her kullanıcıyı kaydet (DM için)"""
+    if not user or user.is_bot: return
+    uid_str = str(user.id)
+    kullanicilar = c.setdefault("kullanicilar", {})
+    if uid_str not in kullanicilar:
+        kullanicilar[uid_str] = {
+            "isim": user.first_name or "?",
+            "username": user.username or "",
+            "giris": bugun(),
+            "son_aktif": bugun(),
+            "dm_ok": True,  # DM alabilir mi (hata alınırsa False yapılır)
+        }
+    else:
+        kullanicilar[uid_str]["isim"] = user.first_name or kullanicilar[uid_str].get("isim","?")
+        kullanicilar[uid_str]["username"] = user.username or ""
+        kullanicilar[uid_str]["son_aktif"] = bugun()
+
+
 def bahis_kontrol(c, uid, bahis_str):
     """Bahis validasyonu. (hata_mesaji, bahis) döner. Hata yoksa hata_mesaji=None"""
     try:
@@ -133,6 +154,30 @@ def bahis_kontrol(c, uid, bahis_str):
     if b["puan"] < bahis:
         return f"Yetersiz bakiye! Bakiyen: {b['puan']:,} puan\n/bonus veya /hbonus ile puan kazan.", None
     return None, bahis
+
+async def casino_gorev_tetikle(context, c, uid, isim, kazandi, kazanc=0):
+    """Casino sonrası görev tetikle + başarım kontrolü"""
+    mesajlar = []
+    # İlk oyun görevi
+    if gorev_tamamla(c, uid, isim, "ilk_oyun"):
+        mesajlar.append(f"🎮 <b>Görev Tamamlandı!</b> Kumar Kapısı +{GOREVLER['ilk_oyun']['puan']} puan!")
+    # Günlük oyun sayacı
+    oyun_sayi = gorev_ilerleme(c, uid, "oyun")
+    if oyun_sayi >= GOREVLER["gunluk_oyun"].get("hedef", 3):
+        if gorev_tamamla(c, uid, isim, "gunluk_oyun"):
+            mesajlar.append(f"🎲 <b>Günlük Görev!</b> Kumar Adığı +{GOREVLER['gunluk_oyun']['puan']} puan!")
+    if kazandi:
+        # İlk kazanç
+        if gorev_tamamla(c, uid, isim, "ilk_kazanc"):
+            mesajlar.append(f"🏆 <b>Görev!</b> İlk Zafer +{GOREVLER['ilk_kazanc']['puan']} puan!")
+        # Günlük kazanç
+        if gorev_tamamla(c, uid, isim, "gunluk_kazanc"):
+            mesajlar.append(f"🤑 <b>Günlük Görev!</b> Kazanan +{GOREVLER['gunluk_kazanc']['puan']} puan!")
+        # Cesur başarımı (500+ tek kazanç)
+        if kazanc >= 500 and kontrol_basarim(c, uid, isim, "cesur"):
+            mesajlar.append("⚡ <b>BAŞARIM: Cesur!</b> 500+ puan tek kazanç!")
+    save(c)
+    return mesajlar
 
 def bugun(): return datetime.now().strftime("%Y-%m-%d")
 
@@ -168,6 +213,49 @@ def add_puan(c, uid, isim, miktar):
     b["seviye"] = hesapla_seviye(c, b["puan"])
     save(c)
     return b["puan"]
+
+def gorev_tamamla(c, uid, isim, gorev_id):
+    """Görevi tamamla, puan ver. True döner = yeni tamamlandı"""
+    if gorev_id not in GOREVLER: return False
+    g = GOREVLER[gorev_id]
+    tamamlananlar = c.setdefault("tamamlanan_gorevler", {}).setdefault(uid, {})
+    tip = g.get("tip", "hic")
+    onceki = tamamlananlar.get(gorev_id, "")
+    if tip == "hic" and onceki: return False
+    if tip == "gun" and onceki == bugun(): return False
+    if tip == "hafta":
+        hkey = datetime.now().strftime("%Y-W%W")
+        if onceki == hkey: return False
+        tamamlananlar[gorev_id] = hkey
+    else:
+        tamamlananlar[gorev_id] = bugun()
+    if g["puan"] > 0:
+        add_puan(c, uid, isim, g["puan"])
+    return True
+
+def kontrol_basarim(c, uid, isim, basarim_id):
+    """Başarımı kontrol et ve ver"""
+    kazanilan = c.setdefault("basarimlar", {}).setdefault(uid, [])
+    if basarim_id not in kazanilan:
+        kazanilan.append(basarim_id)
+        return True
+    return False
+
+def gorev_ilerleme(c, uid, tip_key, artir=1):
+    """Günlük ilerleme sayacı (mesaj, oyun vb.)"""
+    bugun_key = bugun()
+    ilerleme = c.setdefault("gorev_ilerleme", {}).setdefault(uid, {})
+    if ilerleme.get(f"{tip_key}_gun", "") != bugun_key:
+        ilerleme[f"{tip_key}_gun"] = bugun_key
+        ilerleme[f"{tip_key}_sayi"] = 0
+    ilerleme[f"{tip_key}_sayi"] = ilerleme.get(f"{tip_key}_sayi", 0) + artir
+    return ilerleme[f"{tip_key}_sayi"]
+
+def rozet_al(c, uid):
+    """Kullanıcının güncel rozetini döner"""
+    b = get_bakiye(c, uid)
+    sev = hesapla_seviye(c, b.get("puan", 0))
+    return ROZETLER.get(sev, "🌱")
 
 # ── ANA MENÜ ────────────────────────────────────────────────────
 def ana_kb(c=None):
@@ -206,10 +294,24 @@ def geri_kb(cb): return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Geri",
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     c = cfg()
+    # Kullanıcıyı kaydet (DM listesi için)
+    kaydet_kullanici(c, update.effective_user)
     if not c["adminler"]:
         c["adminler"].append(uid); save(c)
     if not is_admin(uid):
-        return await update.message.reply_text("❌ Erişim yok.")
+        # Üye /start yaptı - kaydet ve yardım göster
+        b = get_bakiye(c, str(uid))
+        sev = hesapla_seviye(c, b["puan"])
+        bonus_alindi = c["gunluk_bonus_al"].get(str(uid),"") == bugun()
+        bot_isim = c.get("marka_isim","Bot")
+        await update.message.reply_text(
+            f"<b>Merhaba! {update.effective_user.first_name}</b>\n\n"
+            f"Seviye {sev} | {b['puan']:,} puan\n"
+            f"{'✅ Bonus alindi' if bonus_alindi else f'/bonus yazarak {c[chr(34)+chr(103)+chr(117)+chr(110)+chr(108)+chr(117)+chr(107)+chr(95)+chr(98)+chr(111)+chr(110)+chr(117)+chr(115)+chr(34)]} puan kazan!'}\n\n"
+            f"/yardim — Tum komutlar",
+            parse_mode="HTML")
+        save(c)
+        return
     await update.message.reply_text(
         f"⚡ <b>{c.get('marka_isim','TG Suite Pro')}</b>\n\n"
         f"📢 Kanal: {len(c['kanallar'])}  👥 Üye: {sum(1 for v in c['uyelikler'].values() if v.get('aktif'))}\n"
@@ -684,6 +786,15 @@ async def bonus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = f"Gunluk Bonus!\nTemel: +{temel}"
     if ekstra > 0: msg += f" | Seri ({gun}. gun): +{ekstra}"
     msg += f"\nToplam: +{toplam_b} puan\n[{streak_bar}] {gun}. gun\nSeviye {sev} | {yeni:,} puan"
+    # Görev tetikle
+    gorev_tamamla(c, uid, isim, "ilk_giris")  # Tek seferlik
+    gorev_tamamla(c, uid, isim, "gunluk_bonus")  # Günlük
+    if gun >= 7: gorev_tamamla(c, uid, isim, "haftalik_seri")  # Haftalık
+    # Seviye görevleri
+    if sev >= 5: gorev_tamamla(c, uid, isim, "sev5")
+    if sev >= 10: gorev_tamamla(c, uid, isim, "sev10")
+    if is_vip(c, uid): gorev_tamamla(c, uid, isim, "vip_ol")
+    save(c)
     await update.message.reply_text(msg)
 
 async def transfer_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1806,41 +1917,108 @@ async def futbol_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # 5. Admin'den manuel /ver komutu
 # 6. Etkinlik kazanma
 
+# ── GÖREV TİPLERİ: "hic"=tek seferlik, "gun"=günlük, "hafta"=haftalık ──
 GOREVLER = {
-    "ilk_giris":   {"puan": 100, "aciklama": "🎉 İlk girişin", "tekrar": False},
-    "profil_foto": {"puan": 50,  "aciklama": "📸 Profil fotoğrafı", "tekrar": False},
-    "ilk_oyun":    {"puan": 30,  "aciklama": "🎮 İlk oyununu oynadın", "tekrar": False},
-    "gunluk_mesaj":{"puan": 5,   "aciklama": "💬 Günlük mesaj", "tekrar": True},
-    "haftalik":    {"puan": 200, "aciklama": "📅 Haftalık giriş", "tekrar": True},
+    # ── Tek seferlik (ilk kez) ──
+    "ilk_giris":    {"puan": 200,  "emoji": "🎉", "baslik": "Hosgeldin",       "aciklama": "Bota ilk kez /start yaz",    "tip": "hic"},
+    "ilk_oyun":     {"puan": 100,  "emoji": "🎮", "baslik": "Kumar Kapisi",     "aciklama": "Herhangi bir oyun oyna",      "tip": "hic"},
+    "ilk_kazanc":   {"puan": 150,  "emoji": "🏆", "baslik": "Ilk Zafer",        "aciklama": "Bir oyunda kazan",            "tip": "hic"},
+    "ilk_davet":    {"puan": 250,  "emoji": "🤝", "baslik": "Sosyal Kelebek",   "aciklama": "1 kisiyi davet et",           "tip": "hic"},
+    "bes_davet":    {"puan": 500,  "emoji": "🌟", "baslik": "Topluluk Kurucusu","aciklama": "5 kisi davet et",             "tip": "hic"},
+    "vip_ol":       {"puan": 300,  "emoji": "👑", "baslik": "VIP Kulubu",       "aciklama": "10.000 puana ulaş",           "tip": "hic"},
+    "sev5":         {"puan": 200,  "emoji": "⭐", "baslik": "Orta Yol",         "aciklama": "Seviye 5'e ulaş",             "tip": "hic"},
+    "sev10":        {"puan": 1000, "emoji": "💎", "baslik": "Efsane",           "aciklama": "Seviye 10'a ulaş",            "tip": "hic"},
+    "100k_puan":    {"puan": 500,  "emoji": "💰", "baslik": "Zengin Olmak",     "aciklama": "100.000 puan kazan (toplam)", "tip": "hic"},
+    # ── Günlük (her gün yapılabilir) ──
+    "gunluk_bonus": {"puan": 0,    "emoji": "📅", "baslik": "Sadik Uye",        "aciklama": "/bonus al",                  "tip": "gun"},
+    "gunluk_mesaj": {"puan": 10,   "emoji": "💬", "baslik": "Konuşkan",         "aciklama": "Grupta 5 mesaj at",          "tip": "gun", "hedef": 5},
+    "gunluk_oyun":  {"puan": 25,   "emoji": "🎲", "baslik": "Kumar Adigi",      "aciklama": "3 oyun oyna",                "tip": "gun", "hedef": 3},
+    "gunluk_kazanc":{"puan": 50,   "emoji": "🤑", "baslik": "Kazanan",          "aciklama": "Bir oyunda kazan",           "tip": "gun"},
+    # ── Haftalık ──
+    "haftalik_bonus":{"puan": 0,   "emoji": "🗓", "baslik": "Haftalik Sadakat", "aciklama": "/hbonus al",                 "tip": "hafta"},
+    "haftalik_top3": {"puan": 500, "emoji": "🥇", "baslik": "Top 3",            "aciklama": "Liderlik tablosunda top 3 ol","tip": "hafta"},
+    "haftalik_seri": {"puan": 300, "emoji": "🔥", "baslik": "Kor Olmayan Ates", "aciklama": "7 günlük seri yap",          "tip": "hafta"},
+}
+
+# ── ROZETLER (seviyeye göre otomatik verilir) ──
+ROZETLER = {
+    1:  "🌱 Çaylak",    2:  "🔰 Acemi",     3:  "⚔️ Savaşçı",
+    4:  "🛡 Kahraman",  5:  "⭐ Usta",      6:  "💫 Şampiyon",
+    7:  "🔥 Efsane",    8:  "💎 Elmas",     9:  "👑 Kral",
+    10: "🌌 Tanrı",
+}
+
+# ── BAŞARIMLAR (özel koşullar) ──
+BASARIMLAR = {
+    "sansli":   {"emoji": "🍀", "aciklama": "Aynı oyunda 3 kez üst üste kazan"},
+    "cesur":    {"emoji": "⚡", "aciklama": "Tek seferde 500+ puan kazan"},
+    "fedakar":  {"emoji": "❤️", "aciklama": "100+ puan transfer et"},
+    "koleksiyoner": {"emoji": "🗝", "aciklama": "Marketten 3 farklı ürün al"},
 }
 
 async def gorev_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """📋 Aktif görevleri listele ve tamamla"""
     c = cfg()
     if not c["bakiye_aktif"]: return
     uid = str(update.effective_user.id)
     isim = update.effective_user.first_name
     tamamlanan = c.get("tamamlanan_gorevler", {}).get(uid, {})
     b = get_bakiye(c, uid)
+    sev = hesapla_seviye(c, b["puan"])
+    ilerleme = c.get("gorev_ilerleme", {}).get(uid, {})
 
-    satirlar = []
+    hic_satirlar, gun_satirlar, hafta_satirlar = [], [], []
+    toplam_puan = 0
+
     for gid, g in GOREVLER.items():
+        tip = g.get("tip", "hic")
         tamamlandi = tamamlanan.get(gid, "")
-        if not g["tekrar"] and tamamlandi:
-            satirlar.append(f"✅ {g['aciklama']} (+{g['puan']} puan) — Tamamlandı")
-        elif g["tekrar"] and tamamlandi == bugun():
-            satirlar.append(f"⏳ {g['aciklama']} (+{g['puan']} puan) — Bugün yapıldı")
-        else:
-            satirlar.append(f"⭕ {g['aciklama']} (+{g['puan']} puan) — Bekliyor")
+        hkey = datetime.now().strftime("%Y-W%W")
+        puan_str = f"+{g['puan']}" if g["puan"] > 0 else "Otomatik"
 
-    await update.message.reply_text(
-        f"📋 <b>Görevler</b>\n\n💰 Bakiyen: <b>{b['puan']:,} puan</b>\n\n"
-        + "\n".join(satirlar) +
-        "\n\n💡 Aktif olarak puan kazan!\n"
-        "• /bonus — Günlük puan\n"
-        "• /ref — Arkadaş davet et\n"
-        "• Grupta mesaj yaz\n"
-        "• Oyun oyna", parse_mode="HTML")
+        if tip == "hic":
+            if tamamlandi:
+                satirlar = hic_satirlar
+                satirlar.append(f"✅ {g['emoji']} {g['baslik']} — {g['aciklama']}")
+            else:
+                hic_satirlar.append(f"⭕ {g['emoji']} {g['baslik']} ({puan_str} puan)\n   ↳ {g['aciklama']}")
+        elif tip == "gun":
+            hedef = g.get("hedef", 1)
+            if hedef > 1:
+                sayi = ilerleme.get(f"{'mesaj' if 'mesaj' in gid else 'oyun'}_sayi", 0) if ilerleme.get(f"{'mesaj' if 'mesaj' in gid else 'oyun'}_gun") == bugun() else 0
+                bar = "█" * min(sayi, hedef) + "░" * max(0, hedef - sayi)
+                if tamamlandi == bugun():
+                    gun_satirlar.append(f"✅ {g['emoji']} {g['baslik']} [{bar}] {sayi}/{hedef}")
+                else:
+                    gun_satirlar.append(f"⭕ {g['emoji']} {g['baslik']} ({puan_str} p) [{bar}] {sayi}/{hedef}\n   ↳ {g['aciklama']}")
+            else:
+                if tamamlandi == bugun():
+                    gun_satirlar.append(f"✅ {g['emoji']} {g['baslik']} — Bugün yapıldı")
+                else:
+                    gun_satirlar.append(f"⭕ {g['emoji']} {g['baslik']} ({puan_str} p)\n   ↳ {g['aciklama']}")
+        elif tip == "hafta":
+            if tamamlandi == hkey:
+                hafta_satirlar.append(f"✅ {g['emoji']} {g['baslik']} — Bu hafta yapıldı")
+            else:
+                hafta_satirlar.append(f"⭕ {g['emoji']} {g['baslik']} ({puan_str} p)\n   ↳ {g['aciklama']}")
+
+    # Başarımlar
+    basarimlar = c.get("basarimlar", {}).get(uid, [])
+    bas_str = " ".join([BASARIMLAR[b2]["emoji"] for b2 in basarimlar if b2 in BASARIMLAR]) or "Henüz yok"
+
+    metin = (
+        f"<b>Görev Merkezi</b>\n"
+        f"{rozet_al(c, uid)} Seviye {sev} | {b['puan']:,} puan\n"
+        f"Başarımların: {bas_str}\n\n"
+    )
+    if hic_satirlar:
+        metin += "<b>Tek Seferlik Görevler</b>\n" + "\n".join(hic_satirlar) + "\n\n"
+    if gun_satirlar:
+        metin += "<b>Günlük Görevler</b>\n" + "\n".join(gun_satirlar) + "\n\n"
+    if hafta_satirlar:
+        metin += "<b>Haftalık Görevler</b>\n" + "\n".join(hafta_satirlar)
+
+    await update.message.reply_text(metin.strip(), parse_mode="HTML")
+
 
 async def ver_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin komutu: /ver @kullanıcı [miktar]"""
@@ -1896,373 +2074,322 @@ async def aktiflik_puan(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ── PUAN MARKETI ────────────────────────────────────────────────
 MARKET_URUNLER = {
-    "vip_rozet":  {"isim": "👑 VIP Rozet (1 ay)",    "fiyat": 500},
-    "ozel_unvan": {"isim": "🏷 Özel Ünvan",           "fiyat": 300},
-    "mesaj_pin":  {"isim": "📌 Mesaj Pinleme (1x)",   "fiyat": 200},
-    "gizli_mod":  {"isim": "🌙 Gizli Mod (1 gün)",   "fiyat": 150},
+    # Rozetler ve Statü
+    "vip_rozet":    {"isim": "👑 VIP Rozet",        "fiyat": 2000,  "kategori": "rozet",   "aciklama": "Adinin yaninda VIP rozeti (30 gun)"},
+    "altin_rozet":  {"isim": "🥇 Altin Rozet",      "fiyat": 5000,  "kategori": "rozet",   "aciklama": "Altın rozet (30 gun) + %10 bonus"},
+    "elmas_rozet":  {"isim": "💎 Elmas Rozet",      "fiyat": 15000, "kategori": "rozet",   "aciklama": "Nadir Elmas rozet (30 gun) + %25 bonus"},
+    # Unvanlar
+    "ozel_unvan":   {"isim": "🏷 Özel Ünvan",       "fiyat": 1000,  "kategori": "unvan",   "aciklama": "Admin sana ozel unvan verir"},
+    "grup_ust":     {"isim": "⚡ Grup Lideri",       "fiyat": 3000,  "kategori": "unvan",   "aciklama": "Bir hafta grup lideri unvani"},
+    # Ayricaliklar
+    "mesaj_pin":    {"isim": "📌 Mesaj Pinleme",     "fiyat": 500,   "kategori": "ayricalik","aciklama": "Mesajin 24 saat pinlenir"},
+    "puan_carpan":  {"isim": "⚡ 2x Puan (1 gun)",  "fiyat": 800,   "kategori": "ayricalik","aciklama": "24 saat 2 kat puan kazan"},
+    "bonus_spin":   {"isim": "🎰 Ekstra Spin",       "fiyat": 200,   "kategori": "ayricalik","aciklama": "Casino'da 1 ücretsiz oyun (min bahis ile)"},
+    # Korumalar
+    "ban_kalkan":   {"isim": "🛡 Ban Kalkan (7 gun)","fiyat": 2500,  "kategori": "koruma",  "aciklama": "1 hafta ban koruması (1 uyarıyı iptal eder)"},
+    "warn_sil":     {"isim": "🧹 Uyarı Sil (1 adet)","fiyat": 1500, "kategori": "koruma",  "aciklama": "1 warn silinir"},
 }
 
 async def market_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """🛒 Puan marketi — Puanı ürüne dönüştür"""
     c = cfg()
     if not c["bakiye_aktif"]: return
     uid = str(update.effective_user.id)
     b = get_bakiye(c, uid)
-    satirlar = "\n".join([f"• {v['isim']}: <b>{v['fiyat']} puan</b> — /satin {k}" for k, v in MARKET_URUNLER.items()])
+    sev = hesapla_seviye(c, b["puan"])
+
+    kategoriler = {}
+    for kid, u in MARKET_URUNLER.items():
+        kat = u.get("kategori", "diger")
+        kategoriler.setdefault(kat, []).append((kid, u))
+
+    kat_emojileri = {"rozet":"🏆","unvan":"🏷","ayricalik":"⚡","koruma":"🛡","diger":"🎁"}
+    satirlar = []
+    for kat, urunler in kategoriler.items():
+        satirlar.append(f"\n<b>{kat_emojileri.get(kat,'🎁')} {kat.title()}</b>")
+        for kid, u in urunler:
+            alindi = kid in c.get("satin_alinan", {}).get(uid, [])
+            durum = "✅ Sahip" if alindi else ("✓ Alınabilir" if b["puan"] >= u["fiyat"] else "🔒")
+            satirlar.append(f"{durum} <b>{u['isim']}</b> — {u['fiyat']:,} p\n  ↳ {u.get('aciklama','')}\n  /satin {kid}")
+
     await update.message.reply_text(
-        f"🛒 <b>Puan Marketi</b>\n\n💰 Bakiyen: <b>{b['puan']:,} puan</b>\n\n{satirlar}\n\n"
-        "Satın almak için /satin [ürün_kodu]", parse_mode="HTML")
-
-async def satin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """🛒 Marketten ürün satın al"""
-    c = cfg()
-    if not context.args: return await update.message.reply_text("Kullanım: /satin [urun_kodu]\n/market ile listeye bak")
-    urun_kodu = context.args[0]
-    if urun_kodu not in MARKET_URUNLER:
-        return await update.message.reply_text("❌ Ürün bulunamadı! /market ile listeye bak.")
-    uid = str(update.effective_user.id)
-    isim = update.effective_user.first_name
-    urun = MARKET_URUNLER[urun_kodu]
-    b = get_bakiye(c, uid)
-    if b["puan"] < urun["fiyat"]:
-        return await update.message.reply_text(f"❌ Yetersiz bakiye!\nGerekli: {urun['fiyat']} | Senin: {b['puan']:,}")
-    yeni = add_puan(c, uid, isim, -urun["fiyat"])
-    # Admine bildir
-    for aid in c["adminler"]:
-        try:
-            await context.bot.send_message(aid,
-                f"🛒 <b>Market Satışı</b>\n\n👤 {isim} ({uid})\n📦 {urun['isim']}\n💰 {urun['fiyat']} puan\nKalan: {yeni:,}",
-                parse_mode="HTML")
-        except: pass
-    await update.message.reply_text(
-        f"✅ <b>Satın Alındı!</b>\n\n{urun['isim']}\n💰 Kalan: <b>{yeni:,} puan</b>\n\nYönetici onaylayacak!", parse_mode="HTML")
-
-# ── YENİ MAIN ───────────────────────────────────────────────────
-
-# ══════════════════════════════════════════════════════════════
-#  mesaj_handler_v2 + Admin Yetki Sistemi (Düzeltilmiş)
-# ══════════════════════════════════════════════════════════════
-
-# Admin yetki seviyeleri
-# 3 = Süper Admin  |  2 = Moderatör  |  1 = Yardımcı
-# ══════════════════════════════════════
-# YETKİ SİSTEMİ  (3=SüperAdmin 2=Mod 1=Yardımcı)
-# ══════════════════════════════════════
-YETKILER = {
-    "ban":      2, "kick":    2, "mute":   2, "unmute": 2,
-    "warn":     1, "kurallar":1, "yasak":  1,
-    "casino":   2, "anket":   2,
-    "kanal":    3, "uyelik":  3, "capraz": 3,
-    "marka":    3, "adminler":3, "ayarlar":3, "lisans": 3,
-}
-
-def admin_seviye(uid):
-    c = cfg()
-    if uid not in c.get("adminler", []):
-        return 0
-    return c.get("adminler_seviye", {}).get(str(uid), 3)
-
-def yetki_var_mi(uid, islem):
-    return admin_seviye(uid) >= YETKILER.get(islem, 3)
-
-async def admin_yetki_menu(query):
-    c = cfg()
-    sev_em  = {3: "👑", 2: "🛡", 1: "⭐"}
-    sev_ism = {3: "Süper Admin", 2: "Moderatör", 1: "Yardımcı"}
-    as_dict = c.get("adminler_seviye", {})
-    satirlar = [
-        f"{sev_em.get(as_dict.get(str(a), 3), '👑')} <code>{a}</code> — "
-        f"{sev_ism.get(as_dict.get(str(a), 3), 'Süper Admin')}"
-        for a in c.get("adminler", [])
-    ]
-    await query.edit_message_text(
-        "👥 <b>Admin Yetki Yönetimi</b>\n\n"
-        + ("\n".join(satirlar) or "Henüz admin yok.") +
-        "\n\n👑 Süper Admin (3) — Tüm yetkiler\n"
-        "🛡 Moderatör (2) — Ban/Kick/Mute/Casino\n"
-        "⭐ Yardımcı (1) — Warn/Mesaj silme",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("➕ Yeni Admin Ekle", callback_data="yadmin_ekle")],
-            [InlineKeyboardButton("✏️ Seviye Değiştir",  callback_data="yadmin_seviye_sec")],
-            [InlineKeyboardButton("➖ Admin Sil",         callback_data="yadmin_sil_menu")],
-            [InlineKeyboardButton("📋 Yetki Tablosu",    callback_data="yadmin_tablo")],
-            [InlineKeyboardButton("🔙 Geri",             callback_data="m_ayar")],
-        ])
+        f"<b>🛒 Puan Marketi</b>\n"
+        f"{rozet_al(c, uid)} Bakiyen: <b>{b['puan']:,} puan</b>\n"
+        "".join(satirlar),
+        parse_mode="HTML"
     )
 
-async def cb_v2(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    if not q: return
-    await q.answer()
-    d = q.data
-    uid = q.from_user.id
 
-    # ── Admin yetki menüsü
-    if d == "m_admin_yetki":
-        if admin_seviye(uid) < 3:
-            return await q.answer("❌ Sadece Süper Admin erişebilir!", show_alert=True)
-        await admin_yetki_menu(q)
-
-    elif d == "yadmin_ekle":
-        if admin_seviye(uid) < 3:
-            return await q.answer("❌ Yetki yok!", show_alert=True)
-        await q.edit_message_text(
-            "➕ <b>Yeni Admin Ekle</b>\n\n"
-            "Şu formatı yaz:\n<code>USER_ID SEVİYE</code>\n\n"
-            "👑 3 = Süper Admin\n🛡 2 = Moderatör\n⭐ 1 = Yardımcı\n\n"
-            "Örnek: <code>123456789 2</code>\n\nİptal: /iptal",
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Geri", callback_data="m_admin_yetki")]]))
-        context.user_data["bekle"] = "yadmin_ekle"
-
-    elif d == "yadmin_seviye_sec":
-        if admin_seviye(uid) < 3:
-            return await q.answer("❌ Yetki yok!", show_alert=True)
-        c = cfg()
-        SEV_EMOJI = {3: "👑", 2: "🛡", 1: "⭐"}
-        adminler_seviye = c.get("adminler_seviye", {})
-        rows = [
-            [InlineKeyboardButton(
-                f"{SEV_EMOJI.get(adminler_seviye.get(str(a), 3), '👑')} {a}",
-                callback_data=f"yadmin_sec_{a}"
-            )]
-            for a in c.get("adminler", [])
-        ]
-        rows.append([InlineKeyboardButton("🔙 Geri", callback_data="m_admin_yetki")])
-        await q.edit_message_text(
-            "✏️ Seviyesini değiştireceğin admini seç:",
-            reply_markup=InlineKeyboardMarkup(rows))
-
-    elif d.startswith("yadmin_sec_"):
-        hedef = d.split("_")[-1]
-        await q.edit_message_text(
-            f"👤 <b>ID {hedef}</b> için yeni rol seç:",
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("👑 Süper Admin", callback_data=f"yadmin_set_{hedef}_3")],
-                [InlineKeyboardButton("🛡 Moderatör",   callback_data=f"yadmin_set_{hedef}_2")],
-                [InlineKeyboardButton("⭐ Yardımcı",    callback_data=f"yadmin_set_{hedef}_1")],
-                [InlineKeyboardButton("🔙 Geri", callback_data="yadmin_seviye_sec")],
-            ]))
-
-    elif d.startswith("yadmin_set_"):
-        parcalar = d.split("_")
-        hedef_uid, yeni_sev = parcalar[-2], int(parcalar[-1])
-        c = cfg()
-        if "adminler_seviye" not in c: c["adminler_seviye"] = {}
-        c["adminler_seviye"][str(hedef_uid)] = yeni_sev
-        save(c)
-        SEV_ISIM = {3: "Süper Admin", 2: "Moderatör", 1: "Yardımcı"}
-        await q.answer(f"✅ {SEV_ISIM[yeni_sev]} olarak ayarlandı!", show_alert=True)
-        await admin_yetki_menu(q)
-
-    elif d == "yadmin_sil_menu":
-        if admin_seviye(uid) < 3:
-            return await q.answer("❌ Yetki yok!", show_alert=True)
-        c = cfg()
-        rows = [[InlineKeyboardButton(f"❌ {a}", callback_data=f"yadmin_sil_{a}")] for a in c["adminler"]]
-        rows.append([InlineKeyboardButton("🔙 Geri", callback_data="m_admin_yetki")])
-        await q.edit_message_text("➖ Silinecek admini seç:", reply_markup=InlineKeyboardMarkup(rows))
-
-    elif d.startswith("yadmin_sil_"):
-        aid = int(d.split("_")[-1])
-        c = cfg()
-        if aid == uid:
-            return await q.answer("❌ Kendini silemezsin!", show_alert=True)
-        if len(c["adminler"]) <= 1:
-            return await q.answer("❌ Son admin silinemez!", show_alert=True)
-        if aid in c["adminler"]:
-            c["adminler"].remove(aid)
-            c.get("adminler_seviye", {}).pop(str(aid), None)
+async def satin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    c = cfg()
+    if not context.args:
+        return await update.message.reply_text("Kullanım: /satin [urun_kodu]\n/market ile listeye bak")
+    kid = context.args[0]
+    if kid not in MARKET_URUNLER:
+        return await update.message.reply_text("❌ Ürün bulunamadı! /market ile listeye bak")
+    u = MARKET_URUNLER[kid]
+    uid = str(update.effective_user.id)
+    isim = update.effective_user.first_name
+    b = get_bakiye(c, uid)
+    if b["puan"] < u["fiyat"]:
+        eksik = u["fiyat"] - b["puan"]
+        return await update.message.reply_text(
+            f"❌ Yetersiz puan!\n\nGerekli: {u['fiyat']:,} | Bakiyen: {b['puan']:,}\n"
+            f"Eksik: {eksik:,} puan\n\n/bonus ve /hbonus ile puan kazan!"
+        )
+    # Satın al
+    add_puan(c, uid, isim, -u["fiyat"])
+    satin_al = c.setdefault("satin_alinan", {}).setdefault(uid, [])
+    if kid not in satin_al: satin_al.append(kid)
+    save(c)
+    # Başarım: 3 farklı ürün
+    if len(set(satin_al)) >= 3:
+        if kontrol_basarim(c, uid, isim, "koleksiyoner"):
             save(c)
-            await q.answer("✅ Admin silindi!", show_alert=True)
-        await admin_yetki_menu(q)
-
-    elif d == "yadmin_tablo":
-        await q.edit_message_text(
-            "📋 <b>Yetki Tablosu</b>\n\n"
-            "👑 <b>Süper Admin (3)</b>\n"
-            "• Tüm ayarlar, kanal yönetimi\n"
-            "• Admin ekle/sil/seviye değiştir\n"
-            "• Manuel bakiye ver/al\n"
-            "• Lisans yönetimi\n\n"
-            "🛡 <b>Moderatör (2)</b>\n"
-            "• /ban /kick /mute /unmute\n"
-            "• Casino açma/kapama\n"
-            "• Anket oluşturma\n\n"
-            "⭐ <b>Yardımcı (1)</b>\n"
-            "• /warn komutu\n"
-            "• Mesaj silme\n"
-            "• /kurallar güncelleme",
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Geri", callback_data="m_admin_yetki")]]))
-
-    # ── Oyun menüsü
-    elif d == "m_oyunlar":
-        c = cfg()
-        await q.edit_message_text(
-            f"🎮 <b>Casino Oyunları</b>\n\nDurum: {'🟢 Aktif' if c['casino_aktif'] else '🔴 Pasif'}\n\n"
-            "🎲 /zar  🪙 /tura  🎰 /slot  🎡 /rulet\n"
-            "💣 /mines  🎣 /balik  🔢 /tahmin  🃏 /kart\n"
-            "📊 /ya  🎱 /tombala  ⚔️ /savas  🎁 /hediye\n"
-            "🎳 /bowling  🎯 /dart  🏀 /basketbol  ⚽ /penalti",
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔴 Kapat" if c["casino_aktif"] else "🟢 Aç", callback_data="casino_toggle")],
-                [InlineKeyboardButton("🔙 Geri", callback_data="ana")],
-            ]))
-
-    # ── Geri kalan her callback orijinal cb'ye gider
-    else:
-        await cb(update, context)
-
-
-# ── mesaj_handler_v2: Admin giriş bekle + aktiflik puanı ───
-async def mesaj_handler_v2(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message: return
-    uid = update.effective_user.id
-    bekle = context.user_data.get("bekle")
-
-    # ── Yeni admin ekleme (yetki sistemi)
-    if bekle == "yadmin_ekle" and update.message.text and is_admin(uid):
+    yeni_b = get_bakiye(c, uid)
+    await update.message.reply_text(
+        f"✅ <b>{u['isim']}</b> satın alındı!\n\n"
+        f"Ödenen: {u['fiyat']:,} puan\n"
+        f"Kalan bakiye: {yeni_b['puan']:,} puan\n\n"
+        f"Ürünün aktive edilmesi için admin ile iletişime geç.",
+        parse_mode="HTML"
+    )
+    # Adminlere bildir
+    for aid in c.get("adminler", []):
         try:
-            parcalar = update.message.text.strip().split()
-            yeni_uid, sev = int(parcalar[0]), int(parcalar[1])
-            if sev not in [1, 2, 3]:
-                return await update.message.reply_text("❌ Seviye 1, 2 veya 3 olmalı!")
-            c = cfg()
-            if yeni_uid not in c["adminler"]:
-                c["adminler"].append(yeni_uid)
-            if "adminler_seviye" not in c:
-                c["adminler_seviye"] = {}
-            c["adminler_seviye"][str(yeni_uid)] = sev
-            save(c)
-            context.user_data["bekle"] = None
-            SEV_ISIM = {3: "👑 Süper Admin", 2: "🛡 Moderatör", 1: "⭐ Yardımcı"}
-            await update.message.reply_text(
-                f"✅ Admin eklendi!\n\n"
-                f"ID: <code>{yeni_uid}</code>\n"
-                f"Rol: <b>{SEV_ISIM[sev]}</b>",
-                parse_mode="HTML", reply_markup=ana_kb())
-        except (ValueError, IndexError):
-            await update.message.reply_text(
-                "❌ Hatalı format!\n\nDoğru: <code>123456789 2</code>",
-                parse_mode="HTML")
+            await context.bot.send_message(
+                aid,
+                f"🛒 <b>Market Satışı</b>\n\n"
+                f"Kullanıcı: {isim} (<code>{uid}</code>)\n"
+                f"Ürün: {u['isim']}\n"
+                f"Fiyat: {u['fiyat']:,} puan\n"
+                f"Aktive et veya bildir!",
+                parse_mode="HTML"
+            )
+        except: pass
+
+
+# ══════════════════════════════════════════════════════
+# TOPLU MESAJ & DM SİSTEMİ
+# ══════════════════════════════════════════════════════
+
+async def dm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin komutu: /dm [mesaj] — Botla etkileşen tüm üyelere DM at"""
+    if not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        c = cfg()
+        kullanici_sayisi = len(c.get("kullanicilar", {}))
+        dm_ok = sum(1 for u in c.get("kullanicilar",{}).values() if u.get("dm_ok", True))
+        return await update.message.reply_text(
+            f"<b>DM Sistemi</b>\n\n"
+            f"Kayıtlı kullanıcı: {kullanici_sayisi}\n"
+            f"DM alabilir: {dm_ok}\n\n"
+            f"Kullanım:\n"
+            f"/dm [mesaj] — Tüm kullanıcılara DM at\n"
+            f"/dm_filtre vip — Sadece VIP'lere\n"
+            f"/dm_filtre aktif — Son 7 gün aktif olanlara\n"
+            f"/dm_filtre sev5 — Seviye 5+ olanlara\n\n"
+            f"/dm_listesi — Kullanıcı listesi",
+            parse_mode="HTML"
+        )
+    mesaj = " ".join(context.args)
+    c = cfg()
+    await _toplu_dm_gonder(context, c, mesaj, filtre=None, gonderen=update.effective_user.first_name)
+
+async def dm_filtre_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: /dm_filtre [filtre] [mesaj]"""
+    if not is_admin(update.effective_user.id): return
+    if not context.args or len(context.args) < 2:
+        return await update.message.reply_text(
+            "Kullanım: /dm_filtre [filtre] [mesaj]\n\n"
+            "Filtreler: vip | aktif | sev5 | sev7 | hepsi"
+        )
+    filtre = context.args[0]
+    mesaj = " ".join(context.args[1:])
+    c = cfg()
+    await _toplu_dm_gonder(context, c, mesaj, filtre=filtre, gonderen=update.effective_user.first_name)
+
+async def _toplu_dm_gonder(context, c, mesaj, filtre=None, gonderen="Admin"):
+    """İç fonksiyon: filtreye göre DM gönder"""
+    kullanicilar = c.get("kullanicilar", {})
+    if not kullanicilar:
         return
 
-    # ── Aktiflik puanı (dakikada 1 puan, spam önlemeli)
+    # Filtre uygula
+    hedefler = {}
+    bugun_str = bugun()
+    yedi_gun_once = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+
+    for uid, u in kullanicilar.items():
+        if not u.get("dm_ok", True): continue
+        if is_admin(int(uid)): continue  # Adminlere DM atma
+
+        if filtre == "vip" and not is_vip(c, uid): continue
+        if filtre == "aktif" and u.get("son_aktif", "") < yedi_gun_once: continue
+        if filtre == "sev5":
+            b = get_bakiye(c, uid)
+            if hesapla_seviye(c, b["puan"]) < 5: continue
+        if filtre == "sev7":
+            b = get_bakiye(c, uid)
+            if hesapla_seviye(c, b["puan"]) < 7: continue
+        hedefler[uid] = u
+
+    if not hedefler:
+        return
+
+    basarili = 0
+    basarisiz = 0
+    # Mesajı hazırla
+    dm_mesaj = (
+        f"<b>📢 Duyuru</b>\n\n"
+        f"{mesaj}"
+    )
+    for uid, u in hedefler.items():
+        try:
+            await context.bot.send_message(
+                int(uid),
+                dm_mesaj,
+                parse_mode="HTML"
+            )
+            basarili += 1
+            await asyncio.sleep(0.05)  # Rate limit önlemi
+        except Exception as e:
+            basarisiz += 1
+            # DM kapalı ise işaretle
+            if "bot was blocked" in str(e).lower() or "chat not found" in str(e).lower():
+                c["kullanicilar"][uid]["dm_ok"] = False
+
+    save(c)
+    # Sonucu gönderene bildir (admin bot varsa)
+    try:
+        # Bunu çağıran admin mesajını gönder - ama context.chat_id yok
+        # Sadece log
+        print(f"[DM] Gönderildi: {basarili} | Başarısız: {basarisiz}")
+    except: pass
+
+async def dm_listesi_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: Kayıtlı kullanıcı listesi"""
+    if not is_admin(update.effective_user.id): return
     c = cfg()
-    if c.get("bakiye_aktif") and update.message.text and not is_admin(uid):
-        uid_str = str(uid)
-        isim2 = update.effective_user.first_name or "?"
-        simdi_dk = datetime.now().strftime("%Y-%m-%d %H:%M")
-        son = c.get("son_aktiflik_puani", {}).get(uid_str, "")
-        if son != simdi_dk:
-            c.setdefault("son_aktiflik_puani", {})[uid_str] = simdi_dk
-            add_puan(c, uid_str, isim2, ap)  # ayarlanabilir aktiflik
+    kullanicilar = c.get("kullanicilar", {})
+    if not kullanicilar:
+        return await update.message.reply_text("Henüz kimse kayıtlı.")
 
-    # ── Geri kalan mesajları orijinal handler'a yolla
-    await mesaj_handler(update, context)
+    satirlar = []
+    for uid, u in list(kullanicilar.items())[:50]:  # Maks 50 göster
+        dm = "✉️" if u.get("dm_ok", True) else "🚫"
+        b = get_bakiye(c, uid)
+        sev = hesapla_seviye(c, b["puan"])
+        username = f"@{u['username']}" if u.get("username") else u.get("isim", "?")
+        satirlar.append(f"{dm} Sev{sev} {username} — {b['puan']:,} p")
 
+    toplam = len(kullanicilar)
+    dm_ok = sum(1 for u in kullanicilar.values() if u.get("dm_ok", True))
+    vip_n = sum(1 for uid in kullanicilar if is_vip(c, uid))
 
-# ══════════════════════════════════════════════════════════════
-#  MAIN
-# ══════════════════════════════════════════════════════════════
+    await update.message.reply_text(
+        f"<b>Kullanıcı Listesi</b> (toplam {toplam})\n"
+        f"DM aktif: {dm_ok} | VIP: {vip_n}\n\n"
+        + "\n".join(satirlar[:30]) +
+        (f"\n... ve {toplam-30} kişi daha" if toplam > 30 else ""),
+        parse_mode="HTML"
+    )
 
-async def hbonus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def duyuru_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: /duyuru [mesaj] — Gruba ve tüm kullanıcılara DM"""
+    if not is_admin(update.effective_user.id): return
+    if not context.args:
+        return await update.message.reply_text(
+            "Kullanım: /duyuru [mesaj]\n\n"
+            "Bu komut:\n"
+            "1. Mesajı gruba gönderir\n"
+            "2. Tüm kayıtlı kullanıcılara DM atar"
+        )
+    mesaj = " ".join(context.args)
+    c = cfg()
+    # Kanallara gönder
+    for kanal in c.get("kanallar", []):
+        kid = kanal.split("|")[0].strip()
+        try:
+            await context.bot.send_message(kid, f"📢 <b>DUYURU</b>\n\n{mesaj}", parse_mode="HTML")
+        except: pass
+    # DM gönder
+    await _toplu_dm_gonder(context, c, f"📢 {mesaj}", filtre=None)
+    await update.message.reply_text("✅ Duyuru gönderildi!")
+
+async def etkinlik_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: /etkinlik [tip] [sure_saat] — Özel etkinlik başlat"""
+    if not is_admin(update.effective_user.id): return
+    if not context.args:
+        return await update.message.reply_text(
+            "<b>Etkinlik Sistemi</b>\n\n"
+            "/etkinlik cift_puan 2 — 2 saat çift puan\n"
+            "/etkinlik jackpot — Özel jackpot turu\n"
+            "/etkinlik yarisme — 1 saatlik puan yarışması\n\n"
+            f"Mevcut çarpan: {cfg().get('puan_carpan',1.0)}x",
+            parse_mode="HTML"
+        )
+    tip = context.args[0]
+    c = cfg()
+    if tip == "cift_puan":
+        sure = int(context.args[1]) if len(context.args) > 1 else 2
+        c["puan_carpan"] = 2.0
+        save(c)
+        mesaj = f"🎉 <b>ÇİFT PUAN ETKİNLİĞİ!</b>\n\n{sure} saat boyunca tüm puan kazanımları 2 kat!\n\n/bonus /hbonus ve casino oynayarak avantajdan yararlan!"
+        await _toplu_dm_gonder(context, c, mesaj)
+        await update.message.reply_text(f"✅ Çift puan etkinliği başlatıldı! ({sure} saat)")
+    elif tip == "yarisme":
+        # Anlık liderlik bildirimi
+        sirali = sorted(c["bakiyeler"].items(), key=lambda x: x[1].get("puan",0), reverse=True)[:5]
+        rows = [f"{i+1}. {v.get('isim','?')}: {v.get('puan',0):,}" for i,(u2,v) in enumerate(sirali)]
+        mesaj = (
+            f"🏆 <b>PUAN YARIŞMASI BAŞLADI!</b>\n\n"
+            f"Şu anki liderler:\n" + "\n".join(rows) +
+            f"\n\nEn fazla puan kazanan ödül alır!"
+        )
+        await _toplu_dm_gonder(context, c, mesaj)
+        await update.message.reply_text("✅ Yarışma duyurusu gönderildi!")
+
+async def profil_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Kullanıcı profili — /profil"""
     c = cfg()
     if not c["bakiye_aktif"]: return
-    uid = str(update.effective_user.id); isim = update.effective_user.first_name
-    hkey = datetime.now().strftime("%Y-W%W")
-    if c.get("haftalik_bonus_al",{}).get(uid,"") == hkey:
-        return await update.message.reply_text("Bu hafta haftalik bonusunu aldin. Pazartesi tekrar gel!")
-    haftalik = c.get("haftalik_bonus", 500)
-    yeni = add_puan(c, uid, isim, haftalik)
-    c.setdefault("haftalik_bonus_al",{})[uid] = hkey; save(c)
-    sev = hesapla_seviye(c, yeni)
-    await update.message.reply_text(f"Haftalik Bonus!\n+{haftalik} puan!\nSeviye {sev} | {yeni:,} puan")
-
-async def seviye_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    c = cfg()
-    esikler = c.get("seviye_esikleri",{})
     uid = str(update.effective_user.id)
     b = get_bakiye(c, uid)
     sev = hesapla_seviye(c, b["puan"])
     son_puan, son_sev = sonraki_seviye(c, b["puan"])
-    satirlar = []
-    for s,esik in sorted(esikler.items(), key=lambda x: int(x[0])):
-        isaret = ">>>" if int(s)==sev else "   "
-        satirlar.append(f"{isaret} Seviye {s}: {int(esik):,} puan")
-    kalan_txt = f"\nSonraki: {son_puan-b['puan']:,} puan kaldi" if son_puan else "\nMAKSIMUM!"
+    streak = c.get("streak_kayitlar", {}).get(uid, {}).get("gun", 0)
+    ref_n = len(c.get("ref_kayitlar", {}).get(uid, []))
+    tamamlanan_gorev = len(c.get("tamamlanan_gorevler", {}).get(uid, {}))
+    basarimlar = c.get("basarimlar", {}).get(uid, [])
+    satin = len(c.get("satin_alinan", {}).get(uid, []))
+    vip_tag = " 👑 VIP" if is_vip(c, uid) else ""
+    rozet = rozet_al(c, uid)
+
+    if son_puan:
+        sev_esik = int(c.get("seviye_esikleri", {}).get(str(sev), 0))
+        dolu = int((b["puan"] - sev_esik) / max(1, son_puan - sev_esik) * 12)
+        bar = "█" * dolu + "░" * (12 - dolu)
+        prog = f"[{bar}] {son_puan - b['puan']:,} kaldı"
+    else:
+        prog = "████████████ MAKSIMUM!"
+
+    bas_emojiler = " ".join([BASARIMLAR[ba]["emoji"] for ba in basarimlar if ba in BASARIMLAR]) or "—"
+
     await update.message.reply_text(
-        f"<b>Seviye Tablosu</b>\n\nBakiyen: {b['puan']:,} | Seviye {sev}{kalan_txt}\n\n"
-        + "\n".join(satirlar), parse_mode="HTML")
-
-async def yardim_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Tum kullanicilarin gorebilecegi yardim mesaji"""
-    c = cfg()
-    uid = update.effective_user.id
-    # Admin ise kisa yardim goster
-    if is_admin(uid):
-        await update.message.reply_text(
-            "<b>Admin Paneli</b>\n\n/panel — Admin panelini ac\n/ver [id] [miktar] — Puan ver\n/al [id] [miktar] — Puan al\n/carpan [sayi] — Puan carpanini ayarla",
-            parse_mode="HTML")
-        return
-    # Kullaniciya tam yardim
-    cmin = c.get("casino_min_bahis", 10)
-    cmax = c.get("casino_max_bahis", 1000)
-    gunluk = c.get("gunluk_bonus", 100)
-    haftalik = c.get("haftalik_bonus", 500)
-    ref_odul = c.get("ref_odul", 10)
-    aktiflik = c.get("aktiflik_puan", 2)
-    metin = (
-        "<b>Komutlar ve Yardim</b>\n\n"
-        "<b>Bakiye & Puan</b>\n"
-        f"/bakiye — Puanini ve seviyeni gor\n"
-        f"/bonus — Gunluk bonus al (+{gunluk} puan)\n"
-        f"/hbonus — Haftalik bonus al (+{haftalik} puan)\n"
-        "/seviye — Seviye tablosu\n"
-        "/top — Liderlik tablosu\n"
-        f"/transfer [miktar] — Puan gonder (yanıtlayarak)\n\n"
-        "<b>Referans</b>\n"
-        f"/ref — Davet linki al (+{ref_odul} puan/kisi)\n\n"
-        "<b>Casino</b>\n"
-        f"Min bahis: {cmin} | Maks: {cmax:,} puan\n"
-        "/zar [bahis] — Zar at (2x)\n"
-        "/slot [bahis] — Slot makinesi (7x kadar)\n"
-        "/rulet [bahis] [tahmin] — Rulet (35x kadar)\n"
-        "/balik [bahis] — Balik av (5x kadar)\n"
-        "/mines [bahis] [1-5] — Mayin tarlasi\n"
-        "/tombala [bahis] — Tombala (10x kadar)\n"
-        "/kart [bahis] — Kart oyunu\n"
-        "/bowling [bahis] — Bowling\n"
-        "/dart [bahis] — Dart\n"
-        "/basketbol [bahis] — Basketbol\n"
-        "/penalti [bahis] [sol/orta/sag] — Penalti\n\n"
-        "<b>Puan Kazanma Yollari</b>\n"
-        f"• Her mesaj: {aktiflik} puan/dk\n"
-        "• Gunluk bonus: /bonus\n"
-        "• Haftalik bonus: /hbonus\n"
-        f"• Arkadas davet: /ref ({ref_odul} puan/kisi)\n"
-        "• Casino kazancları\n\n"
-        "<b>Diger</b>\n"
-        "/gorev — Gunluk/haftalik gorevler\n"
-        "/market — Puan marketi\n"
-        "/destek [mesaj] — Destek talebi\n"
-        "/kurallar — Grup kurallari"
+        f"{rozet} <b>{update.effective_user.first_name}</b>{vip_tag}\n"
+        f"Seviye {sev} → Sev{sev+1 if son_sev else sev}\n"
+        f"{prog}\n\n"
+        f"💰 Puan: {b['puan']:,} | Toplam: {b.get('toplam',0):,}\n"
+        f"🔥 Seri: {streak} gün\n"
+        f"🤝 Davet: {ref_n} kişi\n"
+        f"📋 Görev: {tamamlanan_gorev} tamamlandı\n"
+        f"🛒 Market: {satin} ürün\n"
+        f"🏅 Başarımlar: {bas_emojiler}",
+        parse_mode="HTML"
     )
-    await update.message.reply_text(metin, parse_mode="HTML")
 
-async def carpan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id): return
-    c = cfg()
-    if not context.args:
-        return await update.message.reply_text(f"Puan Carpani: {c.get('puan_carpan',1.0)}x\n\nKullanim: /carpan [sayi]\nOrnek: /carpan 2.0")
-    try:
-        p = float(context.args[0]); c["puan_carpan"] = p; save(c)
-        await update.message.reply_text(f"Puan carpani: {p}x")
-    except: await update.message.reply_text("Sayi gir. Ornek: /carpan 2.0")
+
 
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
@@ -2299,6 +2426,13 @@ def main():
     app.add_handler(CommandHandler("yardim",  yardim_cmd))
     app.add_handler(CommandHandler("help",    yardim_cmd))
     app.add_handler(CommandHandler("carpan",  carpan_cmd))
+    app.add_handler(CommandHandler("profil",  profil_cmd))
+    app.add_handler(CommandHandler("p",       profil_cmd))
+    app.add_handler(CommandHandler("dm",          dm_cmd))
+    app.add_handler(CommandHandler("dm_filtre",   dm_filtre_cmd))
+    app.add_handler(CommandHandler("dm_listesi",  dm_listesi_cmd))
+    app.add_handler(CommandHandler("duyuru",      duyuru_cmd))
+    app.add_handler(CommandHandler("etkinlik",    etkinlik_cmd))
     app.add_handler(CommandHandler("transfer",transfer_cmd))
     app.add_handler(CommandHandler("top",     top_cmd))
     app.add_handler(CommandHandler("ref",     ref_cmd))
