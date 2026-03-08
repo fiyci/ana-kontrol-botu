@@ -292,6 +292,12 @@ def gorev_ilerleme(c, uid, tip_key, artir=1):
     ilerleme[f"{tip_key}_sayi"] = ilerleme.get(f"{tip_key}_sayi", 0) + artir
     return ilerleme[f"{tip_key}_sayi"]
 
+ROZETLER = {
+    1: "🌱", 2: "🔰", 3: "⚔️", 4: "🛡",
+    5: "⭐", 6: "💫", 7: "🔥", 8: "💎",
+    9: "👑", 10: "🌌",
+}
+
 def rozet_al(c, uid):
     """Kullanıcının güncel rozetini döner"""
     b = get_bakiye(c, uid)
@@ -299,75 +305,107 @@ def rozet_al(c, uid):
     return ROZETLER.get(sev, "🌱")
 
 # ── ANA MENÜ ────────────────────────────────────────────────────
-def ana_kb(c=None):
+def ana_kb(c=None, sayfa=1):
+    """Admin paneli ana klavyesi — 4 sayfa"""
     if c is None: c = cfg()
-    j  = "🟢" if c["join_aktif"] else "🔴"
-    o  = "🟢" if c["oto_aktif"] else "🔴"
-    e  = "🟢" if c["emoji_aktif"] else "🔴"
-    ca = "🟢" if c["captcha_aktif"] else "🔴"
-    r  = "🟢" if c["rss_aktif"] else "🔴"
-    u  = "🟢" if c["uyelik_aktif"] else "🔴"
-    m  = "🟢" if c["mod_aktif"] else "🔴"
-    cs = "🟢" if c["casino_aktif"] else "🔴"
-    bk = "🟢" if c["bakiye_aktif"] else "🔴"
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"{j} Join Bot", callback_data="m_join"),
-         InlineKeyboardButton(f"{o} Oto Mesaj", callback_data="m_oto")],
-        [InlineKeyboardButton(f"{e} Emoji Bot", callback_data="m_emoji"),
-         InlineKeyboardButton("📢 Kanallar", callback_data="m_kanal")],
-        [InlineKeyboardButton(f"{ca} Captcha", callback_data="m_captcha"),
-         InlineKeyboardButton(f"{r} RSS Bot", callback_data="m_rss")],
-        [InlineKeyboardButton("📣 Çapraz Paylaşım", callback_data="m_capraz"),
-         InlineKeyboardButton(f"{u} Ücretli Üyelik", callback_data="m_uyelik")],
-        [InlineKeyboardButton(f"{m} Moderasyon", callback_data="m_mod"),
-         InlineKeyboardButton(f"{cs} 🎰 Casino", callback_data="m_casino")],
-        [InlineKeyboardButton(f"{bk} 💸 Bakiye/Puan", callback_data="m_bakiye"),
-         InlineKeyboardButton("🤝 Referans", callback_data="m_ref")],
-        [InlineKeyboardButton("📊 Etkinlik & Anket", callback_data="m_etkinlik"),
-         InlineKeyboardButton("📈 Kripto Fiyat", callback_data="m_kripto")],
-        [InlineKeyboardButton("🎫 Destek Tickets", callback_data="m_ticket"),
-         InlineKeyboardButton("📊 İstatistik", callback_data="m_stat")],
-        [InlineKeyboardButton("🎨 Marka & Admin", callback_data="m_ayar")],
-    ])
+    # Durum göstergeleri
+    j  = "🟢" if c.get("join_aktif")    else "🔴"
+    o  = "🟢" if c.get("oto_aktif")     else "🔴"
+    e  = "🟢" if c.get("emoji_aktif")   else "🔴"
+    ca = "🟢" if c.get("captcha_aktif") else "🔴"
+    r  = "🟢" if c.get("rss_aktif")     else "🔴"
+    u  = "🟢" if c.get("uyelik_aktif")  else "🔴"
+    m  = "🟢" if c.get("mod_aktif")     else "🔴"
+    cs = "🟢" if c.get("casino_aktif")  else "🔴"
+    bk = "🟢" if c.get("bakiye_aktif")  else "🔴"
+    kr = "🟢" if c.get("kripto_aktif")  else "🔴"
 
-def geri_kb(cb): return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Geri", callback_data=cb)]])
+    if sayfa == 1:
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("─── 🤖 BOT AYARLARI ───", callback_data="ap_baslik")],
+            [InlineKeyboardButton(f"{j} Join Mesajı",    callback_data="m_join"),
+             InlineKeyboardButton(f"{o} Oto Mesaj",      callback_data="m_oto")],
+            [InlineKeyboardButton(f"{e} Emoji Filtre",   callback_data="m_emoji"),
+             InlineKeyboardButton(f"{ca} Captcha",       callback_data="m_captcha")],
+            [InlineKeyboardButton(f"{r} RSS Haber",      callback_data="m_rss"),
+             InlineKeyboardButton("📢 Kanallar",         callback_data="m_kanal")],
+            [InlineKeyboardButton("📣 Çapraz Paylaşım",  callback_data="m_capraz"),
+             InlineKeyboardButton("📜 Kurallar",         callback_data="kurallar_duzenle")],
+            [InlineKeyboardButton("━━━━━━━━━━━━━━━━━━━━", callback_data="ap_baslik")],
+            [InlineKeyboardButton("2️⃣ Ekonomi »",  callback_data="ap_s2"),
+             InlineKeyboardButton("3️⃣ Topluluk »", callback_data="ap_s3"),
+             InlineKeyboardButton("4️⃣ Yönetim »",  callback_data="ap_s4")],
+        ])
+    elif sayfa == 2:
+        sp_sayi = len(c.get("sponsorlar", {}))
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("─── 💰 EKONOMİ & OYUN ───", callback_data="ap_baslik")],
+            [InlineKeyboardButton(f"{bk} 💸 Bakiye/Puan",      callback_data="m_bakiye"),
+             InlineKeyboardButton(f"{cs} 🎰 Casino",           callback_data="m_casino")],
+            [InlineKeyboardButton(f"{u} 🎫 Ücretli Üyelik",   callback_data="m_uyelik"),
+             InlineKeyboardButton("🤝 Referans Sistemi",       callback_data="m_ref")],
+            [InlineKeyboardButton(f"💎 Sponsorlar ({sp_sayi})", callback_data="ap_sponsor"),
+             InlineKeyboardButton("🎁 Çekiliş Başlat",         callback_data="ap_cekilis")],
+            [InlineKeyboardButton("🏆 Jackpot Havuzu",         callback_data="ap_jackpot"),
+             InlineKeyboardButton("🎖 Puan Ekle/Sil",          callback_data="ap_puan_yonet")],
+            [InlineKeyboardButton("━━━━━━━━━━━━━━━━━━━━", callback_data="ap_baslik")],
+            [InlineKeyboardButton("« 1️⃣ Bot",      callback_data="ap_s1"),
+             InlineKeyboardButton("3️⃣ Topluluk »", callback_data="ap_s3"),
+             InlineKeyboardButton("4️⃣ Yönetim »",  callback_data="ap_s4")],
+        ])
+    elif sayfa == 3:
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("─── 👥 TOPLULUK ───", callback_data="ap_baslik")],
+            [InlineKeyboardButton(f"{m} 🛡 Moderasyon",         callback_data="m_mod"),
+             InlineKeyboardButton("📊 Etkinlik & Anket",        callback_data="m_etkinlik")],
+            [InlineKeyboardButton("📣 Duyuru Gönder",           callback_data="ap_duyuru"),
+             InlineKeyboardButton("📩 Toplu DM",                callback_data="ap_toplu_dm")],
+            [InlineKeyboardButton("📋 Destek Ticket'ları",      callback_data="m_ticket"),
+             InlineKeyboardButton("⚠️ Uyarı Listesi",           callback_data="uyari_liste")],
+            [InlineKeyboardButton("📈 İstatistik",              callback_data="m_stat"),
+             InlineKeyboardButton("📡 Kanal Listesi",           callback_data="m_kanal")],
+            [InlineKeyboardButton("━━━━━━━━━━━━━━━━━━━━", callback_data="ap_baslik")],
+            [InlineKeyboardButton("« 1️⃣ Bot",     callback_data="ap_s1"),
+             InlineKeyboardButton("« 2️⃣ Ekonomi", callback_data="ap_s2"),
+             InlineKeyboardButton("4️⃣ Yönetim »", callback_data="ap_s4")],
+        ])
+    else:  # sayfa 4
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("─── ⚙️ YÖNETİM ───", callback_data="ap_baslik")],
+            [InlineKeyboardButton("👑 Admin Yönetimi",          callback_data="admin_yonetim"),
+             InlineKeyboardButton("🎨 Bot Adı / Marka",         callback_data="m_ayar")],
+            [InlineKeyboardButton(f"{kr} 💹 Kripto Fiyat",     callback_data="m_kripto"),
+             InlineKeyboardButton("🎫 Ücretli Üyelik",          callback_data="m_uyelik")],
+            [InlineKeyboardButton("📊 Tam İstatistik",          callback_data="m_stat"),
+             InlineKeyboardButton("🔄 Oto Mesajı Şimdi Gönder", callback_data="oto_simdi")],
+            [InlineKeyboardButton("🗑 Temizle (1000 mesaj)",    callback_data="ap_temizle"),
+             InlineKeyboardButton("🏓 Bot Ping",                callback_data="ap_ping")],
+            [InlineKeyboardButton("━━━━━━━━━━━━━━━━━━━━", callback_data="ap_baslik")],
+            [InlineKeyboardButton("« 1️⃣ Bot",      callback_data="ap_s1"),
+             InlineKeyboardButton("« 2️⃣ Ekonomi",  callback_data="ap_s2"),
+             InlineKeyboardButton("« 3️⃣ Topluluk", callback_data="ap_s3")],
+        ])
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    context.user_data.clear()  # Önceki bekle state'lerini temizle
-    c = cfg()
-    # Kullanıcıyı kaydet (DM listesi için)
-    kaydet_kullanici(c, update.effective_user)
-    if not c["adminler"]:
-        c["adminler"].append(uid); save(c)
-    if not is_admin(uid):
-        # Üye /start yaptı - kaydet ve yardım göster
-        b = get_bakiye(c, str(uid))
-        sev = hesapla_seviye(c, b["puan"])
-        bonus_alindi = c["gunluk_bonus_al"].get(str(uid),"") == bugun()
-        bot_isim = c.get("marka_isim","SOGTİLLA")
-        await update.message.reply_text(
-            f"<b>Merhaba! {update.effective_user.first_name}</b>\n\n"
-            f"Seviye {sev} | {b['puan']:,} puan\n"
-            f"{'✅ Bonus alindi' if bonus_alindi else f'/bonus yazarak {c[chr(34)+chr(103)+chr(117)+chr(110)+chr(108)+chr(117)+chr(107)+chr(95)+chr(98)+chr(111)+chr(110)+chr(117)+chr(115)+chr(34)]} puan kazan!'}\n\n"
-            f"/yardim — Tum komutlar",
-            parse_mode="HTML")
-        save(c)
-        return
-    await update.message.reply_text(
-        f"⚡ <b>{c.get('marka_isim','SOGTİLLA')}</b>\n\n"
-        f"📢 Kanal: {len(c['kanallar'])}  👥 Üye: {sum(1 for v in c['uyelikler'].values() if v.get('aktif'))}\n"
-        f"💸 Bakiye kayıtlı: {len(c['bakiyeler'])}  🎰 Oyun: {c['stats']['casino_oyun']}",
-        parse_mode="HTML", reply_markup=ana_kb(c)
-    )
 
-async def ana_goster(query, c=None):
+async def ana_goster(query, c=None, sayfa=1):
     if c is None: c = cfg()
+    isim   = c.get("marka_isim", "SOGTİLLA")
+    kanallar = len(c.get("kanallar", []))
+    uyeler   = sum(1 for v in c.get("uyelikler", {}).values() if v.get("aktif"))
+    bakiyeler= len(c.get("bakiyeler", {}))
+    casino_o = c.get("stats", {}).get("casino_oyun", 0)
+    sp_sayi  = len(c.get("sponsorlar", {}))
+    sayfa_isim = {1: "🤖 Bot Ayarları", 2: "💰 Ekonomi & Oyun",
+                  3: "👥 Topluluk", 4: "⚙️ Yönetim"}
     await query.edit_message_text(
-        f"⚡ <b>{c.get('marka_isim','SOGTİLLA')}</b>\n\n"
-        f"📢 Kanal: {len(c['kanallar'])}  👥 Üye: {sum(1 for v in c['uyelikler'].values() if v.get('aktif'))}\n"
-        f"💸 Bakiye kayıtlı: {len(c['bakiyeler'])}  🎰 Oyun: {c['stats']['casino_oyun']}",
-        parse_mode="HTML", reply_markup=ana_kb(c)
+        f"⚡ <b>{isim} — Admin Paneli</b>\n"
+        f"{'━'*24}\n"
+        f"👥 Üye: <b>{uyeler}</b>  📢 Kanal: <b>{kanallar}</b>\n"
+        f"💸 Bakiye: <b>{bakiyeler}</b>  🎰 Oyun: <b>{casino_o:,}</b>\n"
+        f"💎 Sponsor: <b>{sp_sayi}</b>\n"
+        f"{'━'*24}\n"
+        f"Sayfa {sayfa}/4 — {sayfa_isim.get(sayfa, '')}",
+        parse_mode="HTML", reply_markup=ana_kb(c, sayfa=sayfa)
     )
 
 # ── YARDIMCI ────────────────────────────────────────────────────
@@ -452,6 +490,113 @@ async def cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     c = cfg()
 
     if d == "ana": await ana_goster(q)
+
+    elif d == "ap_baslik":
+        await q.answer()  # Başlık butonları — tıklama sessiz
+
+    elif d in ("ap_s1", "ap_s2", "ap_s3", "ap_s4"):
+        sayfa_map = {"ap_s1": 1, "ap_s2": 2, "ap_s3": 3, "ap_s4": 4}
+        await ana_goster(q, c, sayfa=sayfa_map[d])
+
+    elif d == "ap_sponsor":
+        # Sponsor paneline git
+        await _sponsor_panel_goster(q, c, edit=True)
+
+    elif d == "ap_cekilis":
+        await q.edit_message_text(
+            "🎁 <b>Çekiliş Başlat</b>\n\n"
+            "Kullanım: Grupta şu komutu yaz:\n"
+            "<code>/cekilis [ödül_puan] [kazanan_sayısı]</code>\n\n"
+            "Örnek: <code>/cekilis 1000 3</code>\n"
+            "→ 1000 puan × 3 kazanan, 60sn süre",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Ekonomi", callback_data="ap_s2")
+            ]]))
+
+    elif d == "ap_jackpot":
+        havuz = c.get("jackpot_havuz", 0)
+        aktif = "🟢 Aktif" if c.get("jackpot_aktif") else "🔴 Pasif"
+        katki = c.get("jackpot_katki", 2)
+        await q.edit_message_text(
+            f"🏆 <b>Jackpot Havuzu</b>\n\n"
+            f"Durum: {aktif}\n"
+            f"💰 Birikmiş: <b>{havuz:,} puan</b>\n"
+            f"📊 Her oyundan katkı: %{katki}\n\n"
+            f"Çekilişi başlatmak için: /jackpot_cekilis",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton(
+                    "🔴 Kapat" if c.get("jackpot_aktif") else "🟢 Aç",
+                    callback_data="ap_jackpot_toggle")],
+                [InlineKeyboardButton("🔙 Ekonomi", callback_data="ap_s2")],
+            ]))
+
+    elif d == "ap_jackpot_toggle":
+        c["jackpot_aktif"] = not c.get("jackpot_aktif", True)
+        save(c)
+        await q.answer(f"{'🟢 Jackpot açıldı' if c['jackpot_aktif'] else '🔴 Jackpot kapatıldı'}!", show_alert=True)
+        await ana_goster(q, c, sayfa=2)
+
+    elif d == "ap_puan_yonet":
+        top_list = sorted(c.get("bakiyeler", {}).items(),
+                          key=lambda x: x[1].get("puan", 0), reverse=True)[:5]
+        top_str = "\n".join([f"{i+1}. {v.get('isim','?')} — {v.get('puan',0):,} p"
+                              for i, (uid_k, v) in enumerate(top_list)]) or "Henüz veri yok"
+        await q.edit_message_text(
+            f"🎖 <b>Puan Yönetimi</b>\n\n"
+            f"<b>Top 5:</b>\n{top_str}\n\n"
+            f"<b>Komutlar:</b>\n"
+            f"/puanekle @kisi miktar sebep\n"
+            f"/puansil @kisi miktar sebep\n"
+            f"/sifirla @kisi — Sıfırla",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Ekonomi", callback_data="ap_s2")
+            ]]))
+
+    elif d == "ap_duyuru":
+        context.user_data["bekle"] = "ap_duyuru_metin"
+        await q.edit_message_text(
+            "📣 <b>Duyuru Gönder</b>\n\n"
+            "Duyuru metnini yaz. HTML desteklenir.\n"
+            "(<b>kalın</b>, <i>italik</i>, <code>kod</code>)\n\n"
+            "<i>İptal: /iptal</i>",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Vazgeç", callback_data="ap_s3")
+            ]]))
+
+    elif d == "ap_toplu_dm":
+        await q.edit_message_text(
+            "📩 <b>Toplu DM</b>\n\n"
+            "Tüm kayıtlı kullanıcılara DM gönder:\n"
+            "<code>/dm [mesaj]</code>\n\n"
+            "Belirli seviyeye:\n"
+            "<code>/dm_filtre sev3 [mesaj]</code>",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Topluluk", callback_data="ap_s3")
+            ]]))
+
+    elif d == "ap_ping":
+        import time as _time_ping
+        t = _time_ping.time()
+        ms = int((_time_ping.time() - t) * 1000)
+        await q.answer(f"🏓 Pong! {ms}ms", show_alert=True)
+
+    elif d == "ap_temizle":
+        await q.edit_message_text(
+            "🗑 <b>Mesaj Temizle</b>\n\n"
+            "Son 1000 mesajı silmek için grupta:\n"
+            "<code>/temizle</code>\n\n"
+            "⚠️ Bu işlem geri alınamaz!",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Yönetim", callback_data="ap_s4")
+            ]]))
+
+
 
     # KANAL
     elif d == "m_kanal":
@@ -2588,6 +2733,29 @@ async def mesaj_handler_v2(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except ValueError:
                 await auto_reply(update, "❌ Geçersiz ID! Sadece sayısal Telegram ID gir.\nÖrn: <code>123456789</code>", parse_mode="HTML")
 
+        elif bekle == "ap_duyuru_metin":
+            context.user_data["bekle"] = None
+            chat_id = update.effective_chat.id
+            metin_duyuru = update.message.text.strip()
+            # Tüm kayıtlı kullanıcılara gönder
+            kullanicilar = c.get("kullanicilar", {})
+            basarili = 0
+            for u_id_str in kullanicilar:
+                try:
+                    await context.bot.send_message(
+                        int(u_id_str),
+                        f"📣 <b>Duyuru</b>\n\n{metin_duyuru}",
+                        parse_mode="HTML"
+                    )
+                    basarili += 1
+                except:
+                    pass
+            await update.message.reply_text(
+                f"✅ Duyuru gönderildi!\n"
+                f"📤 {basarili}/{len(kullanicilar)} kişiye ulaştı.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Panele Dön", callback_data="ap_s3")
+                ]]))
         elif bekle == "adm_ekle_id":
             # Yeni admin ekleme: ID alındı → seviye seç
             try:
@@ -5991,6 +6159,52 @@ def _start_metin(c, sekme="genel"):
         "diger":    f"⚙️ <b>Diğerleri</b>\n\nKurallar, rehber, destek ve daha fazlası",
     }
     return sekmeler.get(sekme, sekmeler["genel"])
+
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Bot ana komutu — üye için sekmeli panel, admin için admin paneli"""
+    context.user_data.clear()
+    uid = update.effective_user.id
+    c = cfg()
+    # İlk kullanıcıyı admin yap
+    if not c.get("adminler"):
+        c.setdefault("adminler", []).append(uid)
+        save(c)
+    kaydet_kullanici(c, update.effective_user)
+
+    if is_admin(uid):
+        isim = c.get("marka_isim", "SOGTİLLA")
+        kanallar  = len(c.get("kanallar", []))
+        uyeler    = sum(1 for v in c.get("uyelikler", {}).values() if v.get("aktif"))
+        bakiyeler = len(c.get("bakiyeler", {}))
+        casino_o  = c.get("stats", {}).get("casino_oyun", 0)
+        sp_sayi   = len(c.get("sponsorlar", {}))
+        await update.message.reply_text(
+            f"⚡ <b>{isim} — Admin Paneli</b>\n"
+            f"{'━'*24}\n"
+            f"👥 Üye: <b>{uyeler}</b>  📢 Kanal: <b>{kanallar}</b>\n"
+            f"💸 Bakiye: <b>{bakiyeler}</b>  🎰 Oyun: <b>{casino_o:,}</b>\n"
+            f"💎 Sponsor: <b>{sp_sayi}</b>\n"
+            f"{'━'*24}\n"
+            f"Sayfa 1/4 — 🤖 Bot Ayarları",
+            parse_mode="HTML",
+            reply_markup=ana_kb(c, sayfa=1)
+        )
+    else:
+        # Üye paneli — sekmeli
+        b = get_bakiye(c, str(uid))
+        sev = hesapla_seviye(c, b["puan"])
+        rozet = rozet_al(c, str(uid))
+        bot_isim = c.get("marka_isim", "SOGTİLLA")
+        bonus_alindi = c.get("gunluk_bonus_al", {}).get(str(uid), "") == bugun()
+        await update.message.reply_text(
+            f"{rozet} <b>Hoş geldin, {update.effective_user.first_name}!</b>\n"
+            f"⭐ Seviye {sev}  |  💰 {b['puan']:,} puan\n\n"
+            f"<b>🤖 {bot_isim}</b>\n"
+            f"Aşağıdan sekmeler arasında gezin:",
+            parse_mode="HTML",
+            reply_markup=_start_panel_kb("casino")
+        )
 
 
 async def start_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
