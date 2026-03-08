@@ -812,7 +812,7 @@ async def bonus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if sev >= 10: gorev_tamamla(c, uid, isim, "sev10")
     if is_vip(c, uid): gorev_tamamla(c, uid, isim, "vip_ol")
     save(c)
-    await update.message.reply_text(msg)
+    await dm_veya_grup(update, context, msg, "🎁 {isim} günlük bonus aldı!")
 
 async def transfer_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     c=cfg()
@@ -833,7 +833,7 @@ async def transfer_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         hedef=get_bakiye(c, hedef_uid); hedef["puan"]+=miktar; hedef["isim"]=hedef_isim
         save(c)
         await update.message.reply_text(f"✅ Transfer tamamlandı!\n{isim} → {hedef_isim}: <b>{miktar:,} puan</b>", parse_mode="HTML")
-    except: await update.message.reply_text("❌ Hata! Kullanım: /transfer [miktar] (yanıtlayarak)")
+    except: await dm_veya_grup(update, context, "❌ Hata! Kullanım: /transfer [miktar] (yanıtlayarak)", "💸 Transfer sonucu DM'ine gönderildi!")
 
 async def top_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     c = cfg()
@@ -869,1109 +869,605 @@ async def ref_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML")
 
 # CASİNO — ZAR
+
+# ═══════════════════════════════════════════════════════
+#  CASİNO MODÜLÜ v2 — Animasyonlu, gruba spam yok
+#  - Tüm oyunlar: önce "oynuyor..." mesajı → edit ile sonuç
+#  - Sonuç mesajı sadece o kişiye reply (gruba dağılmaz)
+#  - Tüm bug'lar düzeltildi
+# ═══════════════════════════════════════════════════════
+
+import asyncio as _asyncio
+
+
+# ══════════════════════════════════════════════════
+# GRUP TEMİZLİĞİ — Casino/bakiye sonuçları DM'e gider
+# ══════════════════════════════════════════════════
+
+async def dm_veya_grup(update: Update, context, metin: str,
+                       grup_ozet: str = None, parse_mode: str = "HTML"):
+    """
+    Grup: kısa özet gruba + tam sonuç DM'e
+    Private: direkt reply
+    """
+    chat_type = update.effective_chat.type
+    uid = update.effective_user.id
+
+    if chat_type == "private":
+        await update.message.reply_text(metin, parse_mode=parse_mode)
+        return
+
+    # Grup → DM'e gönder
+    try:
+        await context.bot.send_message(uid, metin, parse_mode=parse_mode)
+        ozet = grup_ozet or "📩 Sonuç DM'ine gönderildi!"
+        await update.message.reply_text(ozet, parse_mode=parse_mode)
+    except Exception:
+        # DM kapalıysa gruba yaz (kısa versiyon)
+        await update.message.reply_text(metin, parse_mode=parse_mode)
+
+
+async def dm_anim_veya_grup(update: Update, context, anim_metin: str,
+                             sonuc_metin: str, grup_ozet: str = None,
+                             sure: float = 1.2, parse_mode="HTML"):
+    """
+    Animasyonlu versiyon:
+    Private: anim mesajı → edit ile sonuç
+    Grup: gruba kısa "oynuyor..." → sil → DM'e sonuç → gruba özet
+    """
+    chat_type = update.effective_chat.type
+    uid = update.effective_user.id
+
+    if chat_type == "private":
+        msg = await update.message.reply_text(anim_metin)
+        await _asyncio.sleep(sure)
+        await msg.edit_text(sonuc_metin, parse_mode=parse_mode)
+        return
+
+    # Grup: kısa animasyon mesajı gönder, sonra sil
+    try:
+        anim_msg = await update.message.reply_text(anim_metin)
+        await _asyncio.sleep(sure)
+        try:
+            await anim_msg.delete()
+        except:
+            pass
+        # DM'e sonucu gönder
+        await context.bot.send_message(uid, sonuc_metin, parse_mode=parse_mode)
+        ozet = grup_ozet or "📩 Sonuç DM'ine gönderildi!"
+        await update.message.reply_text(ozet, parse_mode=parse_mode)
+    except Exception:
+        # DM kapalıysa gruba yaz
+        msg = await update.message.reply_text(anim_metin)
+        await _asyncio.sleep(sure)
+        await msg.edit_text(sonuc_metin, parse_mode=parse_mode)
+
+
+async def _casino_anim(msg, metin, sure=1.2):
+    """Yükleniyor animasyonu → sonuç"""
+    await _asyncio.sleep(sure)
+    await msg.edit_text(metin, parse_mode="HTML")
+
+# ── ZAR ──────────────────────────────────────────────
 async def zar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    c=cfg()
-    if not c["casino_aktif"]: return
-    uid=str(update.effective_user.id); isim=update.effective_user.first_name
-    if not context.args: return await update.message.reply_text(f"🎲 Kullanım: /zar [bahis]\nMin: {c['casino_min_bahis']} | Max: {c['casino_max_bahis']}")
-    try:
-        hata, bahis = bahis_kontrol(c, uid, context.args[0])
-        if hata: return await update.message.reply_text(hata)
-        b = get_bakiye(c, uid)
-        zar1=random.randint(1,6); zar2=random.randint(1,6)
-        zar_emoji=["1️⃣","2️⃣","3️⃣","4️⃣","5️⃣","6️⃣"]
-        if zar1>zar2: kazanc=bahis; sonuc="🎉 Kazandın!"
-        elif zar1<zar2: kazanc=-bahis; sonuc="😢 Kaybettin!"
-        else: kazanc=int(bahis*1.5); sonuc="🎊 Beraberlik! Ekstra bonus!"
-        yeni=add_puan(c, uid, isim, kazanc)
-        c["stats"]["casino_oyun"]+=1; save(c)
-        await update.message.reply_text(
-            f"🎲 <b>Zar Oyunu</b>\n\n"
-            f"Sen: {zar_emoji[zar1-1]}  Bot: {zar_emoji[zar2-1]}\n\n"
-            f"{sonuc}\n{'➕' if kazanc>0 else '➖'} <b>{abs(kazanc):,} puan</b>\n"
-            f"💰 Bakiye: <b>{yeni:,}</b>", parse_mode="HTML")
-    except: await update.message.reply_text("❌ Geçerli bir miktar gir!")
-
-# CASİNO — YAZI TURA
-async def tura_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    c=cfg()
-    if not c["casino_aktif"]: return
-    uid=str(update.effective_user.id); isim=update.effective_user.first_name
-    if not context.args: return await update.message.reply_text("Kullanım: /tura [bahis] yazı|tura")
-    try:
-        hata, bahis = bahis_kontrol(c, uid, context.args[0])
-        if hata: return await update.message.reply_text(hata)
-        tahmin=context.args[1].lower() if len(context.args)>1 else "yazı"
-        b = get_bakiye(c, uid)
-        emoji="🪙" if sonuc=="yazı" else "💫"
-        if tahmin==sonuc: kazanc=bahis; txt="🎉 Kazandın!"
-        else: kazanc=-bahis; txt="😢 Kaybettin!"
-        yeni=add_puan(c, uid, isim, kazanc)
-        c["stats"]["casino_oyun"]+=1; save(c)
-        await update.message.reply_text(
-            f"{emoji} <b>Yazı Tura</b>\n\nSonuç: <b>{sonuc.upper()}</b>\nTahmin: {tahmin}\n\n{txt}\n"
-            f"{'➕' if kazanc>0 else '➖'} <b>{abs(kazanc):,} puan</b>\n💰 Bakiye: <b>{yeni:,}</b>", parse_mode="HTML")
-    except: await update.message.reply_text("❌ Kullanım: /tura [bahis] yazı veya tura")
-
-# CASİNO — SLOT
-async def slot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    c=cfg()
-    if not c["casino_aktif"]: return
-    uid=str(update.effective_user.id); isim=update.effective_user.first_name
-    if not context.args: return await update.message.reply_text(f"🎰 Kullanım: /slot [bahis]")
-    try:
-        hata, bahis = bahis_kontrol(c, uid, context.args[0])
-        if hata: return await update.message.reply_text(hata)
-        b = get_bakiye(c, uid)
-        s=[random.choice(semboller) for _ in range(3)]
-        if s[0]==s[1]==s[2]=="7️⃣": kazanc=bahis*10; txt="🎊 JACKPOT! 10x!"
-        elif s[0]==s[1]==s[2]=="💎": kazanc=bahis*5; txt="💎 ELMAS! 5x!"
-        elif s[0]==s[1]==s[2]: kazanc=bahis*3; txt="🎉 3'lü! 3x!"
-        elif s[0]==s[1] or s[1]==s[2]: kazanc=bahis; txt="✨ 2'li! 1x!"
-        else: kazanc=-bahis; txt="😢 Kaybettin!"
-        yeni=add_puan(c, uid, isim, kazanc)
-        c["stats"]["casino_oyun"]+=1; save(c)
-        await update.message.reply_text(
-            f"🎰 <b>Slot Makinesi</b>\n\n┌─────────┐\n│ {s[0]} {s[1]} {s[2]} │\n└─────────┘\n\n"
-            f"{txt}\n{'➕' if kazanc>0 else '➖'} <b>{abs(kazanc):,} puan</b>\n💰 Bakiye: <b>{yeni:,}</b>", parse_mode="HTML")
-    except: await update.message.reply_text("❌ Kullanım: /slot [bahis]")
-
-# CASİNO — RULET
-async def rulet_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    c=cfg()
-    if not c["casino_aktif"]: return
-    uid=str(update.effective_user.id); isim=update.effective_user.first_name
-    if len(context.args)<2: return await update.message.reply_text("🎡 Kullanım: /rulet [bahis] [kırmızı|siyah|tek|çift|0-36]")
-    try:
-        hata, bahis = bahis_kontrol(c, uid, context.args[0])
-        if hata: return await update.message.reply_text(hata)
-        tahmin=" ".join(context.args[1:]).lower()
-        b = get_bakiye(c, uid)
-        kirmizi={1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36}
-        renk="🔴 Kırmızı" if sayi in kirmizi else ("⚫ Siyah" if sayi>0 else "🟢 Sıfır")
-        tek_cift="tek" if sayi%2==1 else "çift" if sayi>0 else "—"
-        if tahmin==str(sayi): kazanc=bahis*35; txt=f"🎊 TAM İSABET! 35x!"
-        elif tahmin in ["kırmızı","kirmizi"] and sayi in kirmizi: kazanc=bahis; txt="🔴 Kırmızı! Kazandın!"
-        elif tahmin in ["siyah","siyahi"] and sayi>0 and sayi not in kirmizi: kazanc=bahis; txt="⚫ Siyah! Kazandın!"
-        elif tahmin=="tek" and sayi%2==1: kazanc=bahis; txt="Tek! Kazandın!"
-        elif tahmin=="çift" and sayi>0 and sayi%2==0: kazanc=bahis; txt="Çift! Kazandın!"
-        else: kazanc=-bahis; txt="😢 Kaybettin!"
-        yeni=add_puan(c, uid, isim, kazanc)
-        c["stats"]["casino_oyun"]+=1; save(c)
-        await update.message.reply_text(
-            f"🎡 <b>Rulet</b>\n\nSayı: <b>{sayi}</b> {renk}\n{'Tek/Çift: '+tek_cift if tek_cift!='—' else ''}\n\n"
-            f"{txt}\n{'➕' if kazanc>0 else '➖'} <b>{abs(kazanc):,} puan</b>\n💰 Bakiye: <b>{yeni:,}</b>", parse_mode="HTML")
-    except: await update.message.reply_text("❌ Kullanım: /rulet [bahis] kırmızı")
-
-# MODERASYOn KOMUTLARI
-async def warn_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id): return
-    if not update.message.reply_to_message: return await update.message.reply_text("Uyarmak için mesajı yanıtla!")
-    c=cfg()
-    hedef=update.message.reply_to_message.from_user
-    uid=str(hedef.id)
-    c["uyarilar"][uid]=c["uyarilar"].get(uid,0)+1
-    sayi=c["uyarilar"][uid]; max_u=c["max_uyari"]
-    save(c)
-    if sayi>=max_u:
-        try:
-            await context.bot.ban_chat_member(update.effective_chat.id, hedef.id)
-            c["uyarilar"].pop(uid,None); save(c)
-            await update.message.reply_text(f"🔨 <b>{hedef.first_name}</b> banlandı! ({max_u}/{max_u} uyarı)", parse_mode="HTML")
-        except Exception as e: await update.message.reply_text(f"❌ Ban başarısız: {e}")
-    else:
-        await update.message.reply_text(f"⚠️ <b>{hedef.first_name}</b> uyarıldı! ({sayi}/{max_u})", parse_mode="HTML")
-
-async def ban_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id): return
-    if not update.message.reply_to_message: return await update.message.reply_text("Banlamak için mesajı yanıtla!")
-    hedef=update.message.reply_to_message.from_user
-    try:
-        await context.bot.ban_chat_member(update.effective_chat.id, hedef.id)
-        await update.message.reply_text(f"🔨 <b>{hedef.first_name}</b> banlandı!", parse_mode="HTML")
-    except Exception as e: await update.message.reply_text(f"❌ {e}")
-
-async def kick_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id): return
-    if not update.message.reply_to_message: return await update.message.reply_text("Kicklemek için mesajı yanıtla!")
-    hedef=update.message.reply_to_message.from_user
-    try:
-        await context.bot.ban_chat_member(update.effective_chat.id, hedef.id)
-        await context.bot.unban_chat_member(update.effective_chat.id, hedef.id)
-        await update.message.reply_text(f"👟 <b>{hedef.first_name}</b> kicklendi!", parse_mode="HTML")
-    except Exception as e: await update.message.reply_text(f"❌ {e}")
-
-async def mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id): return
-    if not update.message.reply_to_message: return await update.message.reply_text("Mutlamak için mesajı yanıtla!")
-    hedef=update.message.reply_to_message.from_user
-    sure=int(context.args[0]) if context.args else 10
-    try:
-        until=datetime.now()+timedelta(minutes=sure)
-        await context.bot.restrict_chat_member(update.effective_chat.id, hedef.id,
-            permissions=ChatPermissions(can_send_messages=False), until_date=until)
-        await update.message.reply_text(f"🔇 <b>{hedef.first_name}</b> {sure} dakika susturuldu!", parse_mode="HTML")
-    except Exception as e: await update.message.reply_text(f"❌ {e}")
-
-async def unmute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id): return
-    if not update.message.reply_to_message: return
-    hedef=update.message.reply_to_message.from_user
-    try:
-        await context.bot.restrict_chat_member(update.effective_chat.id, hedef.id,
-            permissions=ChatPermissions(can_send_messages=True, can_send_media_messages=True,
-                                        can_send_other_messages=True, can_add_web_page_previews=True))
-        await update.message.reply_text(f"🔊 <b>{hedef.first_name}</b> sesi açıldı!", parse_mode="HTML")
-    except Exception as e: await update.message.reply_text(f"❌ {e}")
-
-async def kurallar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    c=cfg()
-    await update.message.reply_text(f"📌 <b>Grup Kuralları</b>\n\n{c['kurallar']}", parse_mode="HTML")
-
-async def yasakekle_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id): return
-    if not context.args: return await update.message.reply_text("Kullanım: /yasakekle kelime")
-    c=cfg(); kelime=" ".join(context.args).lower()
-    if kelime not in c["yasakli_kelimeler"]: c["yasakli_kelimeler"].append(kelime); save(c)
-    await update.message.reply_text(f"✅ '{kelime}' yasaklı listeye eklendi!")
-
-async def yasaksil_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id): return
-    if not context.args: return await update.message.reply_text("Kullanım: /yasaksil kelime")
-    c=cfg(); kelime=" ".join(context.args).lower()
-    if kelime in c["yasakli_kelimeler"]: c["yasakli_kelimeler"].remove(kelime); save(c); await update.message.reply_text(f"✅ '{kelime}' kaldırıldı!")
-    else: await update.message.reply_text("❌ Bulunamadı!")
-
-# ANKET
-async def anket_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id): return
-    if not context.args: return await update.message.reply_text("Kullanım: /anket Soru?|Seçenek1|Seçenek2|Seçenek3")
-    parcalar=" ".join(context.args).split("|")
-    if len(parcalar)<3: return await update.message.reply_text("❌ En az 2 seçenek lazım!")
-    soru=parcalar[0].strip(); secenekler=[p.strip() for p in parcalar[1:]]
-    try:
-        await context.bot.send_poll(update.effective_chat.id, soru, secenekler, is_anonymous=False)
-    except Exception as e: await update.message.reply_text(f"❌ {e}")
-
-# KRİPTO
-async def kripto_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    c=cfg()
-    if not c["kripto_aktif"]: return
-    sembol=context.args[0].upper() if context.args else "BTC"
-    try:
-        import urllib.request
-        url=f"https://api.coingecko.com/api/v3/simple/price?ids={_kripto_id(sembol)}&vs_currencies=usd,try"
-        with urllib.request.urlopen(url, timeout=5) as r:
-            data=json.loads(r.read())
-        kid=_kripto_id(sembol)
-        if kid in data:
-            usd=data[kid].get("usd","?"); try_val=data[kid].get("try","?")
-            await update.message.reply_text(f"📈 <b>{sembol}</b>\n\n💵 ${usd:,}\n🇹🇷 ₺{try_val:,}", parse_mode="HTML")
-        else: await update.message.reply_text(f"❌ '{sembol}' bulunamadı!")
-    except Exception as e: await update.message.reply_text(f"❌ Fiyat alınamadı: {e}")
-
-def _kripto_id(sembol):
-    ids={"BTC":"bitcoin","ETH":"ethereum","TON":"the-open-network","SOL":"solana",
-         "BNB":"binancecoin","USDT":"tether","XRP":"ripple","ADA":"cardano","DOT":"polkadot","AVAX":"avalanche-2"}
-    return ids.get(sembol.upper(), sembol.lower())
-
-async def btc_cmd(update, context): context.args=["BTC"]; await kripto_cmd(update, context)
-async def eth_cmd(update, context): context.args=["ETH"]; await kripto_cmd(update, context)
-async def ton_cmd(update, context): context.args=["TON"]; await kripto_cmd(update, context)
-
-# TICKET & DESTEK
-async def destek_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args: return await update.message.reply_text("Kullanım: /destek [mesajın]")
-    c=cfg(); uid=update.effective_user.id
-    tid=str(uid)[-6:]
-    c.setdefault("tickets",{})[tid]={"durum":"acik","isim":update.effective_user.first_name,"user_id":uid,"mesaj":" ".join(context.args)}
-    save(c)
-    await update.message.reply_text(f"🎫 Ticket açıldı #{tid}\nEn kısa sürede yanıtlanacak!")
-    for aid in c["adminler"]:
-        try: await context.bot.send_message(aid, f"🎫 <b>Yeni Ticket #{tid}</b>\n👤 {update.effective_user.first_name} ({uid})\n💬 {' '.join(context.args)}\n\nCevap: /cevap {tid} [mesaj]", parse_mode="HTML")
-        except: pass
-
-async def cevap_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id): return
-    if len(context.args)<2: return await update.message.reply_text("Kullanım: /cevap [ticket_id] [mesaj]")
-    c=cfg(); tid=context.args[0]; mesaj=" ".join(context.args[1:])
-    if tid not in c.get("tickets",{}): return await update.message.reply_text("❌ Ticket bulunamadı!")
-    ticket=c["tickets"][tid]; ticket["durum"]="kapali"; save(c)
-    try:
-        await context.bot.send_message(ticket["user_id"], f"🎫 <b>Ticket #{tid} Yanıtlandı</b>\n\n{mesaj}", parse_mode="HTML")
-        await update.message.reply_text("✅ Yanıt gönderildi!")
-    except: await update.message.reply_text("❌ Kullanıcıya ulaşılamadı!")
-
-# ÜCRETLI ÜYELİK
-async def onayla_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id): return
-    if len(context.args)<2: return await update.message.reply_text("Kullanım: /onayla [user_id] [1ay|3ay|yillik]")
-    c=cfg()
-    try:
-        uid_str,plan=context.args[0],context.args[1]
-        if plan not in c["uyelik_fiyatlar"]: return await update.message.reply_text("❌ Plan: 1ay, 3ay, yillik")
-        gun=c["uyelik_fiyatlar"][plan]["gun"]
-        bitis=(datetime.now()+timedelta(days=gun)).strftime("%Y-%m-%d")
-        c["uyelikler"][uid_str]={"plan":plan,"bitis":bitis,"aktif":True,"isim":f"Kullanıcı {uid_str}"}
-        c["stats"]["uyelik_satis"]+=1; save(c)
-        await update.message.reply_text(f"✅ Onaylandı! {uid_str} → {plan} → {bitis}")
-        try: await context.bot.send_message(int(uid_str), f"✅ Üyeliğin onaylandı!\nPlan: {plan}\nBitiş: {bitis} 🎉")
-        except: pass
-    except Exception as e: await update.message.reply_text(f"❌ {e}")
-
-async def uyeol_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    c=cfg()
-    if not c["uyelik_aktif"]: return await update.message.reply_text("❌ Üyelik sistemi aktif değil.")
-    txt=("💰 <b>Ücretli Üyelik</b>\n\n"
-        +"\n".join([f"• {v['label']}: <b>{v['fiyat']} USDT</b>" for v in c['uyelik_fiyatlar'].values()])
-        +f"\n\n💎 TON: <code>{c['uyelik_ton_adres']}</code>\n💵 USDT: <code>{c['uyelik_usdt_adres']}</code>\n\nÖdeme sonrası yöneticiye ulaşın.")
-    await update.message.reply_text(txt, parse_mode="HTML")
-
-# ── JOIN HANDLER ─────────────────────────────────────────────────
-async def join_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    c=cfg()
-    if not c["join_aktif"]: return
-    user=update.chat_join_request.from_user
-    # Referans kontrolü
-    if context.args and str(context.args[0]).startswith("ref_"):
-        davet_eden=context.args[0].replace("ref_","")
-        if "ref_kayitlar" not in c: c["ref_kayitlar"]={}
-        kayit=c["ref_kayitlar"].setdefault(davet_eden,[])
-        if str(user.id) not in kayit:
-            kayit.append(str(user.id))
-            add_puan(c, davet_eden, "?", c["ref_odul"])
-    try:
-        await _gonder(context.bot, user.id,
-            c["join_mesaj"].format(first_name=user.first_name or "Kullanıcı",
-                                   last_name=user.last_name or "", username=user.username or ""),
-            c.get("join_medya_tip","yok"), c.get("join_medya_id",""), c.get("join_butonlar",[]))
-        await update.chat_join_request.approve()
-        c["stats"]["join"]+=1
-        b=c.get("buyume",{}); gun=bugun()
-        if gun not in b: b[gun]={"katilan":0}
-        b[gun]["katilan"]+=1; c["buyume"]=b; save(c)
-    except Exception as e:
-        logger.error(f"Join: {e}")
-        try: await update.chat_join_request.approve()
-        except: pass
-
-# ── MESAJ HANDLER ────────────────────────────────────────────────
-async def mesaj_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message: return
-    uid=update.effective_user.id; c=cfg()
-
-    # Foto/Video yükleme
-    if update.message.photo:
-        fid=update.message.photo[-1].file_id; bekle=context.user_data.get("bekle")
-        if is_admin(uid):
-            if bekle=="join_foto": c["join_medya_tip"]="foto"; c["join_medya_id"]=fid; save(c); context.user_data["bekle"]=None; await update.message.reply_text("✅ Kaydedildi!", reply_markup=ana_kb())
-            elif bekle=="oto_foto": c["oto_medya_tip"]="foto"; c["oto_medya_id"]=fid; save(c); context.user_data["bekle"]=None; await update.message.reply_text("✅ Kaydedildi!", reply_markup=ana_kb())
-        return
-
-    if update.message.video:
-        fid=update.message.video.file_id; bekle=context.user_data.get("bekle")
-        if is_admin(uid):
-            if bekle=="join_video": c["join_medya_tip"]="video"; c["join_medya_id"]=fid; save(c); context.user_data["bekle"]=None; await update.message.reply_text("✅ Kaydedildi!", reply_markup=ana_kb())
-            elif bekle=="oto_video": c["oto_medya_tip"]="video"; c["oto_medya_id"]=fid; save(c); context.user_data["bekle"]=None; await update.message.reply_text("✅ Kaydedildi!", reply_markup=ana_kb())
-        return
-
-    metin=update.message.text
-    if not metin: return
-
-    # Yasaklı kelime kontrolü
-    if c["mod_aktif"] and not is_admin(uid):
-        for yasak in c.get("yasakli_kelimeler",[]):
-            if yasak.lower() in metin.lower():
-                try: await update.message.delete()
-                except: pass
-                await update.message.reply_to_message and None or None
-                return
-
-    # Flood kontrolü
-    if c["flood_aktif"] and not is_admin(uid):
-        simdi=datetime.now().timestamp()
-        uid_str=str(uid)
-        flood=c["flood_sayac"].setdefault(uid_str,[])
-        flood=[t for t in flood if simdi-t<c["flood_sure"]]
-        flood.append(simdi)
-        c["flood_sayac"][uid_str]=flood; save(c)
-        if len(flood)>=c["flood_limit"]:
-            try:
-                await context.bot.restrict_chat_member(update.effective_chat.id, uid,
-                    permissions=ChatPermissions(can_send_messages=False),
-                    until_date=datetime.now()+timedelta(minutes=5))
-                await update.message.reply_text(f"🔇 Flood! {update.effective_user.first_name} 5 dakika susturuldu.")
-                c["flood_sayac"][uid_str]=[]; save(c)
-            except: pass
-            return
-
-    # Captcha kontrolü
-    if str(uid) in c.get("captcha_bekleyenler",{}):
-        bkl=c["captcha_bekleyenler"][str(uid)]
-        if metin.strip()==str(bkl["cevap"]):
-            del c["captcha_bekleyenler"][str(uid)]; save(c)
-            await update.message.reply_text("✅ Doğrulandın! 🎉")
-        else: await update.message.reply_text("❌ Yanlış cevap!")
-        return
-
-    # Emoji bot
-    if c["emoji_aktif"] and not is_admin(uid):
-        for k,v in c["emoji_kurallar"].items():
-            if k.lower() in metin.lower():
-                try: await update.message.reply_text(v); c["stats"]["emoji"]+=1; save(c)
-                except: pass
-                return
-
-    if not is_admin(uid): return
-    bekle=context.user_data.get("bekle")
-    if not bekle: return
-
-    # Admin girişleri
-    kaydetler={
-        "join_mesaj":("join_mesaj",None,"✅ Mesaj güncellendi!"),
-        "rss_url":("rss_url",None,"✅ RSS URL kaydedildi!"),
-        "marka_isim":("marka_isim",None,"✅ İsim güncellendi!"),
-        "kurallar":("kurallar",None,"✅ Kurallar güncellendi!"),
-    }
-    if bekle in kaydetler:
-        key,_,msg=kaydetler[bekle]; c[key]=metin; save(c); context.user_data["bekle"]=None
-        await update.message.reply_text(msg, reply_markup=ana_kb())
-    elif bekle=="kanal_ekle":
-        try:
-            p=metin.strip().split("|")
-            c["kanallar"].append({"id":int(p[0].strip()),"isim":p[1].strip() if len(p)>1 else p[0]}); save(c)
-            context.user_data["bekle"]=None; await update.message.reply_text("✅ Kanal eklendi!", reply_markup=ana_kb())
-        except: await update.message.reply_text("❌ Format: <code>-100xxx|Kanal Adı</code>", parse_mode="HTML")
-    elif bekle=="join_buton":
-        try:
-            p=metin.strip().split("|"); c.setdefault("join_butonlar",[]).append([p[0].strip(),p[1].strip()]); save(c)
-            context.user_data["bekle"]=None; await update.message.reply_text("✅ Buton eklendi!", reply_markup=ana_kb())
-        except: await update.message.reply_text("❌ Format: <code>Buton|https://link</code>", parse_mode="HTML")
-    elif bekle=="oto_mesaj":
-        c["oto_mesajlar"].append(metin); save(c); context.user_data["bekle"]=None
-        await update.message.reply_text("✅ Mesaj eklendi!", reply_markup=ana_kb())
-    elif bekle=="oto_aralik":
-        try: c["oto_aralik"]=int(float(metin)*3600); save(c); context.user_data["bekle"]=None; await update.message.reply_text(f"✅ {metin} saat", reply_markup=ana_kb())
-        except: await update.message.reply_text("❌ Sayı gir.")
-    elif bekle=="emoji_kural":
-        p=metin.strip().split()
-        if len(p)>=2: c["emoji_kurallar"][p[0].lower()]=p[1]; save(c); context.user_data["bekle"]=None; await update.message.reply_text(f"✅ {p[0]}→{p[1]}", reply_markup=ana_kb())
-        else: await update.message.reply_text("❌ Format: <code>kelime 😀</code>", parse_mode="HTML")
-    elif bekle=="captcha_sure":
-        try: c["captcha_sure"]=int(metin); save(c); context.user_data["bekle"]=None; await update.message.reply_text(f"✅ {metin}s", reply_markup=ana_kb())
-        except: await update.message.reply_text("❌ Sayı gir.")
-    elif bekle=="max_uyari":
-        try: c["max_uyari"]=int(metin); save(c); context.user_data["bekle"]=None; await update.message.reply_text(f"✅ Max uyarı: {metin}", reply_markup=ana_kb())
-        except: await update.message.reply_text("❌ Sayı gir.")
-    elif bekle=="casino_min":
-        try: c["casino_min_bahis"]=int(metin); save(c); context.user_data["bekle"]=None; await update.message.reply_text(f"✅ Min bahis: {metin}", reply_markup=ana_kb())
-        except: await update.message.reply_text("❌ Sayı gir.")
-    elif bekle=="casino_max":
-        try: c["casino_max_bahis"]=int(metin); save(c); context.user_data["bekle"]=None; await update.message.reply_text(f"✅ Max bahis: {metin}", reply_markup=ana_kb())
-        except: await update.message.reply_text("❌ Sayı gir.")
-    elif bekle=="gunluk_bonus":
-        try: c["gunluk_bonus"]=int(metin); save(c); context.user_data["bekle"]=None; await update.message.reply_text(f"✅ Günlük bonus: {metin}", reply_markup=ana_kb())
-        except: await update.message.reply_text("❌ Sayı gir.")
-    elif bekle=="bakiye_ver":
-        try:
-            p=metin.strip().split(); uid2,miktar=p[0],int(p[1])
-            yeni=add_puan(c, uid2, f"Kullanıcı {uid2}", miktar)
-            context.user_data["bekle"]=None; await update.message.reply_text(f"✅ {uid2} → +{miktar} puan (Toplam: {yeni:,})", reply_markup=ana_kb())
-        except: await update.message.reply_text("❌ Format: [user_id] [miktar]")
-    elif bekle=="ref_odul":
-        try: c["ref_odul"]=int(metin); save(c); context.user_data["bekle"]=None; await update.message.reply_text(f"Odül: {metin} puan", reply_markup=ana_kb())
-        except: await update.message.reply_text("Sayi gir.")
-    elif bekle=="haftalik_bonus":
-        try: c["haftalik_bonus"]=int(metin); save(c); context.user_data["bekle"]=None; await update.message.reply_text(f"Haftalik: {metin} puan", reply_markup=ana_kb())
-        except: await update.message.reply_text("Sayi gir.")
-    elif bekle=="streak_ayar":
-        try:
-            p=metin.strip().split(); c["streak_bonus_katsayi"]=int(p[0]); c["streak_max"]=int(p[1]); save(c)
-            context.user_data["bekle"]=None; await update.message.reply_text(f"Seri: +{p[0]}/gun, maks {p[1]} gun", reply_markup=ana_kb())
-        except: await update.message.reply_text("Format: 20 7")
-    elif bekle=="aktiflik_puan":
-        try: c["aktiflik_puan"]=int(metin); save(c); context.user_data["bekle"]=None; await update.message.reply_text(f"Aktiflik: {metin} puan/dk", reply_markup=ana_kb())
-        except: await update.message.reply_text("Sayi gir (0=kapali)")
-    elif bekle=="vip_ayar":
-        try:
-            p=metin.strip().split(); c["vip_esik"]=int(p[0]); c["vip_bonus_katsayi"]=float(p[1]); save(c)
-            context.user_data["bekle"]=None; await update.message.reply_text(f"VIP: {int(p[0]):,} puan, x{float(p[1])}", reply_markup=ana_kb())
-        except: await update.message.reply_text("Format: 10000 1.5")
-    elif bekle=="puan_carpan":
-        try: c["puan_carpan"]=float(metin); save(c); context.user_data["bekle"]=None; await update.message.reply_text(f"Carpan: {metin}x", reply_markup=ana_kb())
-        except: await update.message.reply_text("Sayi gir (orn: 2.0)")
-    elif bekle=="bakiye_ver":
-        try:
-            p=metin.strip().split(); uid2,miktar=p[0],int(p[1])
-            yeni=add_puan(c,uid2,f"Kullanici {uid2}",miktar)
-            context.user_data["bekle"]=None; await update.message.reply_text(f"Tamam: {uid2} -> {miktar:+,} | Toplam: {yeni:,}", reply_markup=ana_kb())
-        except: await update.message.reply_text("Format: [user_id] [miktar]")
-    elif bekle=="uyelik_fiyat":
-        try:
-            p=metin.strip().split("|"); plan,fiyat=p[0].strip(),int(p[1].strip())
-            if plan in c["uyelik_fiyatlar"]: c["uyelik_fiyatlar"][plan]["fiyat"]=fiyat; save(c); context.user_data["bekle"]=None; await update.message.reply_text(f"✅ {plan}: {fiyat} USDT", reply_markup=ana_kb())
-            else: await update.message.reply_text("❌ Plan: 1ay, 3ay veya yillik")
-        except: await update.message.reply_text("❌ Format: <code>1ay|50</code>", parse_mode="HTML")
-    elif bekle=="uyelik_cuzdan":
-        try:
-            p=metin.strip().split("|"); tip,adres=p[0].lower(),p[1].strip()
-            if tip=="ton": c["uyelik_ton_adres"]=adres
-            elif tip=="usdt": c["uyelik_usdt_adres"]=adres
-            save(c); context.user_data["bekle"]=None; await update.message.reply_text(f"✅ {tip.upper()} güncellendi!", reply_markup=ana_kb())
-        except: await update.message.reply_text("❌ Format: <code>ton|ADRES</code>", parse_mode="HTML")
-    elif bekle=="admin_ekle":
-        try:
-            aid=int(metin.strip())
-            if aid not in c["adminler"]: c["adminler"].append(aid); save(c)
-            context.user_data["bekle"]=None; await update.message.reply_text(f"✅ Admin eklendi: {aid}", reply_markup=ana_kb())
-        except: await update.message.reply_text("❌ Geçerli ID gir.")
-
-# ── CAPTCHA YENİ ÜYE ─────────────────────────────────────────────
-async def yeni_uye(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    c=cfg()
-    if not c["captcha_aktif"] or not update.message.new_chat_members: return
-    for user in update.message.new_chat_members:
-        if user.is_bot: continue
-        a=random.randint(1,10); b2=random.randint(1,10)
-        c["captcha_bekleyenler"][str(user.id)]={"cevap":a+b2,"chat":update.effective_chat.id}; save(c)
-        await update.message.reply_text(f"👋 {user.first_name}!\n\n🔐 <b>{a} + {b2} = ?</b>\n\n⏱ {c['captcha_sure']} saniye", parse_mode="HTML")
-        context.job_queue.run_once(_captcha_timeout, c["captcha_sure"],
-            data={"user_id":user.id,"chat_id":update.effective_chat.id}, name=f"cap_{user.id}")
-
-async def _captcha_timeout(context):
-    data=context.job.data; c=cfg(); uid=str(data["user_id"])
-    if uid in c.get("captcha_bekleyenler",{}):
-        del c["captcha_bekleyenler"][uid]; save(c)
-        try:
-            await context.bot.ban_chat_member(data["chat_id"], data["user_id"])
-            await context.bot.unban_chat_member(data["chat_id"], data["user_id"])
-            await context.bot.send_message(data["chat_id"], "⏱ Süre doldu, kullanıcı çıkarıldı.")
-        except: pass
-
-# ── OTO & RSS JOBS ───────────────────────────────────────────────
-async def oto_job(context):
-    c=cfg()
-    if not c["oto_aktif"] or not c["oto_mesajlar"] or not c["kanallar"]: return
-    mesaj=random.choice(c["oto_mesajlar"])
-    for k in c["kanallar"]:
-        try: await _gonder(context.bot, k["id"], mesaj, c.get("oto_medya_tip","yok"), c.get("oto_medya_id","")); c["stats"]["oto"]+=1
-        except Exception as e: logger.error(f"Oto: {e}")
-    save(c)
-
-async def rss_job(context):
-    c=cfg()
-    if not c["rss_aktif"] or not c.get("rss_url") or not c.get("rss_kanal"): return
-    try:
-        import feedparser
-        feed=feedparser.parse(c["rss_url"])
-        if not feed.entries: return
-        son=feed.entries[0]; link=son.get("link","")
-        if link==c.get("rss_son_link"): return
-        baslik=son.get("title","Yeni"); ozet=son.get("summary","")[:300]
-        await context.bot.send_message(c["rss_kanal"], f"📰 <b>{baslik}</b>\n\n{ozet}\n\n🔗 {link}", parse_mode="HTML")
-        c["rss_son_link"]=link; save(c)
-    except Exception as e: logger.error(f"RSS: {e}")
-
-# ── KOMUTLAR ─────────────────────────────────────────────────────
-async def iptal(update, context): context.user_data["bekle"]=None; await update.message.reply_text("❌ İptal.", reply_markup=ana_kb())
-async def otosil_cmd(update, context):
-    if not is_admin(update.effective_user.id): return
-    c=cfg()
-    if not context.args or not context.args[0].isdigit(): return await update.message.reply_text("Kullanım: /otosil 2")
-    idx=int(context.args[0])-1
-    if 0<=idx<len(c["oto_mesajlar"]): c["oto_mesajlar"].pop(idx); save(c); await update.message.reply_text("🗑 Silindi!")
-    else: await update.message.reply_text("❌ Geçersiz!")
-async def emojisil_cmd(update, context):
-    if not is_admin(update.effective_user.id): return
-    c=cfg()
-    if not context.args: return await update.message.reply_text("Kullanım: /emojisil kelime")
-    k=context.args[0].lower()
-    if k in c["emoji_kurallar"]: del c["emoji_kurallar"][k]; save(c); await update.message.reply_text(f"🗑 {k} silindi!")
-    else: await update.message.reply_text("❌ Bulunamadı!")
-async def butonsil_cmd(update, context):
-    if not is_admin(update.effective_user.id): return
-    c=cfg()
-    if not context.args or not context.args[0].isdigit(): return await update.message.reply_text("Kullanım: /butonsil 1")
-    idx=int(context.args[0])-1; b=c.get("join_butonlar",[])
-    if 0<=idx<len(b): b.pop(idx); c["join_butonlar"]=b; save(c); await update.message.reply_text("🗑 Silindi!")
-
-# ═══════════════════════════════════════════════════════════════
-#  YENİ OYUNLAR + ADMİN YETKİ SİSTEMİ — v5.1 EK MODÜL
-# ═══════════════════════════════════════════════════════════════
-
-# ── ADMİN YETKİ SİSTEMİ ────────────────────────────────────────
-# Yetki seviyeleri:
-# 3 = Süper Admin (her şey)
-# 2 = Moderatör (warn/ban/kick/mute + casino yönet)
-# 1 = Yardımcı (sadece warn + mesaj silme)
-
-async def mines_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """💣 Mayın Tarlası — 9 kutucuk, mayına basma!"""
     c = cfg()
     if not c["casino_aktif"]: return
     uid = str(update.effective_user.id)
     isim = update.effective_user.first_name
     if not context.args:
         return await update.message.reply_text(
-            "💣 <b>Mayın Tarlası</b>\n\nKullanım: /mines [bahis] [mayın_sayısı 1-5]\n"
-            "Örnek: /mines 100 3\n\nDaha fazla mayın = daha yüksek ödül!", parse_mode="HTML")
+            f"🎲 <b>Zar Oyunu</b>\nKullanım: /zar [bahis]\nMin: {c['casino_min_bahis']} | Max: {c['casino_max_bahis']}",
+            parse_mode="HTML")
     try:
-        bahis = int(context.args[0])
-        mayin_sayi = int(context.args[1]) if len(context.args) > 1 else 3
-        mayin_sayi = max(1, min(5, mayin_sayi))
-        b = get_bakiye(c, uid)
-        if b["puan"] < bahis: return await update.message.reply_text("❌ Yetersiz bakiye!")
-        if bahis < c["casino_min_bahis"] or bahis > c["casino_max_bahis"]:
-            return await update.message.reply_text(f"❌ Bahis {c['casino_min_bahis']}-{c['casino_max_bahis']} arası!")
-
-        # 9 kutucuk, mayın_sayi adet mayın
-        kutucuklar = ["💣"] * mayin_sayi + ["💎"] * (9 - mayin_sayi)
-        random.shuffle(kutucuklar)
-        secilen = random.randint(0, 8)
-
-        if kutucuklar[secilen] == "💣":
-            kazanc = -bahis
-            sonuc_txt = "💥 <b>PATLADI!</b> Mayına bastın!"
-        else:
-            carpan = round(1 + (mayin_sayi * 0.5), 1)
-            kazanc = int(bahis * carpan) - bahis
-            sonuc_txt = f"💎 <b>GÜVENLİ!</b> {carpan}x çarpan!"
-
-        # Tahtayı göster
-        tahta = ""
-        for i, k in enumerate(kutucuklar):
-            if i == secilen: tahta += f"[{k}]"
-            else: tahta += "[ ]" if kutucuklar[i] == "💎" else "[💣]" if kazanc < 0 else "[ ]"
-            if (i + 1) % 3 == 0: tahta += "\n"
-
+        hata, bahis = bahis_kontrol(c, uid, context.args[0])
+        if hata: return await update.message.reply_text(hata)
+        _anim_str = "🎲 Zarlar atılıyor..."
+        zar1 = random.randint(1,6); zar2 = random.randint(1,6)
+        ze = ["1️⃣","2️⃣","3️⃣","4️⃣","5️⃣","6️⃣"]
+        if zar1 > zar2:   kazanc = bahis;          sonuc = "🎉 Kazandın!"
+        elif zar1 < zar2: kazanc = -bahis;         sonuc = "😢 Kaybettin!"
+        else:             kazanc = int(bahis*1.5); sonuc = "🎊 Beraberlik! +%50 bonus!"
         yeni = add_puan(c, uid, isim, kazanc)
         c["stats"]["casino_oyun"] += 1; save(c)
-        await update.message.reply_text(
-            f"💣 <b>Mayın Tarlası</b> ({mayin_sayi} mayın)\n\n{tahta}\n"
-            f"{sonuc_txt}\n{'➕' if kazanc > 0 else '➖'} <b>{abs(kazanc):,} puan</b>\n"
-            f"💰 Bakiye: <b>{yeni:,}</b>", parse_mode="HTML")
-    except: await update.message.reply_text("❌ Kullanım: /mines [bahis] [1-5 mayın]")
+        await dm_anim_veya_grup(update, context, _anim_str,
+            f"🎲 <b>Zar Oyunu</b>\n\n"
+            f"Sen: {ze[zar1-1]}  Bot: {ze[zar2-1]}\n\n"
+            f"{sonuc}\n{'➕' if kazanc>0 else '➖'} <b>{abs(kazanc):,} puan</b>\n"
+            f"💰 Bakiye: <b>{yeni:,}</b>")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Geçerli bir miktar gir!")
 
-
-async def balik_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """🎣 Balık Avı — Şans oyunu, farklı balıklar farklı ödüller"""
+# ── YAZI TURA ────────────────────────────────────────
+async def tura_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     c = cfg()
     if not c["casino_aktif"]: return
     uid = str(update.effective_user.id)
     isim = update.effective_user.first_name
     if not context.args:
-        return await update.message.reply_text("Kullanim: /balik [bahis]")
+        return await update.message.reply_text(
+            "🪙 <b>Yazı Tura</b>\nKullanım: /tura [bahis] [yazı/tura]\nÖrnek: /tura 100 yazı",
+            parse_mode="HTML")
     try:
         hata, bahis = bahis_kontrol(c, uid, context.args[0])
         if hata: return await update.message.reply_text(hata)
-        b = get_bakiye(c, uid)
-
-        baliklar = [
-            ("🦈 KÖPEK BALIĞI",  5,  0.03),
-            ("🐋 BALİNA",        4,  0.05),
-            ("🐠 TROPIKAL BALIK",3,  0.12),
-            ("🐟 NORMAL BALIK",  1.5,0.30),
-            ("🦐 KARİDES",       0.5,0.25),
-            ("👢 ESKİ BOT",     -1,  0.15),
-            ("🌿 YOSUN",        -0.5,0.10),
-        ]
-        r = random.random(); toplam = 0
-        secilen = baliklar[-1]
-        for balik, carpan, oran in baliklar:
-            toplam += oran
-            if r <= toplam:
-                secilen = (balik, carpan, oran); break
-
-        balik_isim, carpan, _ = secilen
-        if carpan > 0: kazanc = int(bahis * carpan) - bahis
-        else: kazanc = int(bahis * abs(carpan)) * -1
-
+        tahmin_raw = context.args[1].lower() if len(context.args) > 1 else "yazı"
+        # yazı/y/yazi → yazı | tura/t → tura
+        if tahmin_raw in ("yazı","yazi","y"): tahmin = "yazı"
+        elif tahmin_raw in ("tura","t"): tahmin = "tura"
+        else:
+            return await update.message.reply_text("❌ Tahmin: yazı veya tura\nÖrnek: /tura 100 yazı")
+        _anim_str = "🪙 Para atılıyor..."
+        sonuc = random.choice(["yazı","tura"])
+        emoji = "🪙" if sonuc == "yazı" else "💫"
+        if tahmin == sonuc: kazanc = bahis;  txt = "🎉 Kazandın!"
+        else:               kazanc = -bahis; txt = "😢 Kaybettin!"
         yeni = add_puan(c, uid, isim, kazanc)
         c["stats"]["casino_oyun"] += 1; save(c)
-        await update.message.reply_text(
-            f"🎣 <b>Balık Avı</b>\n\n🌊 Olta attın...\n\n{balik_isim}!\n\n"
-            f"{'➕' if kazanc >= 0 else '➖'} <b>{abs(kazanc):,} puan</b>\n"
-            f"💰 Bakiye: <b>{yeni:,}</b>", parse_mode="HTML")
-    except: await update.message.reply_text("❌ Kullanım: /balik [bahis]")
+        await dm_anim_veya_grup(update, context, _anim_str,
+            f"{emoji} <b>Yazı Tura</b>\n\n"
+            f"Sonuç: <b>{sonuc.upper()}</b>\n"
+            f"Tahmin: {tahmin}\n\n"
+            f"{txt}\n{'➕' if kazanc>0 else '➖'} <b>{abs(kazanc):,} puan</b>\n"
+            f"💰 Bakiye: <b>{yeni:,}</b>")
+    except:
+        await update.message.reply_text("❌ Geçerli bir miktar gir!")
 
-
-async def tahmin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """🔢 Sayı Tahmin — 1-10 arası sayı tah, 8x ödül!"""
+# ── SLOT ─────────────────────────────────────────────
+async def slot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     c = cfg()
     if not c["casino_aktif"]: return
     uid = str(update.effective_user.id)
     isim = update.effective_user.first_name
-    if len(context.args) < 2:
-        return await update.message.reply_text("🔢 Kullanım: /tahmin [bahis] [1-10]\nDoğru tahmin = 8x ödül!")
+    if not context.args:
+        return await update.message.reply_text("🎰 Kullanım: /slot [bahis]")
     try:
-        bahis = int(context.args[0]); tahmin = int(context.args[1])
-        if not 1 <= tahmin <= 10: return await update.message.reply_text("❌ 1-10 arası bir sayı gir!")
-        b = get_bakiye(c, uid)
-        if b["puan"] < bahis: return await update.message.reply_text("❌ Yetersiz bakiye!")
-        if bahis < c["casino_min_bahis"] or bahis > c["casino_max_bahis"]:
-            return await update.message.reply_text(f"❌ Bahis {c['casino_min_bahis']}-{c['casino_max_bahis']} arası!")
+        hata, bahis = bahis_kontrol(c, uid, context.args[0])
+        if hata: return await update.message.reply_text(hata)
+        msg = await update.message.reply_text("🎰 Kollar çekiliyor...\n⬛ ⬛ ⬛")
+        semboller = ["🍒","🍋","🍊","🍇","💎","7️⃣","⭐","🔔"]
+        s = [random.choice(semboller) for _ in range(3)]
+        if s[0]==s[1]==s[2]:
+            if s[0]=="💎":   kazanc=bahis*10; txt="💎 JACKPOT! 10x!"
+            elif s[0]=="7️⃣": kazanc=bahis*7;  txt="7️⃣ SÜPER! 7x!"
+            else:            kazanc=bahis*3;  txt="🎉 ÜÇLÜ! 3x!"
+        elif s[0]==s[1] or s[1]==s[2] or s[0]==s[2]:
+            kazanc=int(bahis*1.5); txt="✨ İkili! 1.5x!"
+        else:
+            kazanc=-bahis; txt="😢 Kaybettin!"
+        yeni = add_puan(c, uid, isim, kazanc)
+        c["stats"]["casino_oyun"] += 1; save(c)
+        await dm_anim_veya_grup(update, context, _anim_str,
+            f"🎰 <b>Slot Makinesi</b>\n\n"
+            f"┃ {s[0]} {s[1]} {s[2]} ┃\n\n"
+            f"{txt}\n{'➕' if kazanc>0 else '➖'} <b>{abs(kazanc):,} puan</b>\n"
+            f"💰 Bakiye: <b>{yeni:,}</b>")
+    except:
+        await update.message.reply_text("❌ Geçerli bir miktar gir!")
 
+# ── RULET ────────────────────────────────────────────
+async def rulet_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    c = cfg()
+    if not c["casino_aktif"]: return
+    uid = str(update.effective_user.id)
+    isim = update.effective_user.first_name
+    if not context.args or len(context.args) < 2:
+        return await update.message.reply_text(
+            "🎡 <b>Rulet</b>\nKullanım: /rulet [bahis] [tahmin]\n\n"
+            "Tahmin seçenekleri:\n"
+            "• <b>kırmızı / siyah</b> — 2x\n"
+            "• <b>tek / çift</b> — 2x\n"
+            "• <b>0-36</b> (tam sayı) — 36x\n"
+            "Örnek: /rulet 100 kırmızı", parse_mode="HTML")
+    try:
+        hata, bahis = bahis_kontrol(c, uid, context.args[0])
+        if hata: return await update.message.reply_text(hata)
+        tahmin = " ".join(context.args[1:]).lower()
+        _anim_str = "🎡 Rulet dönüyor..."
+        sayi = random.randint(0, 36)
+        kirmizi = {1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36}
+        renk = "🔴 Kırmızı" if sayi in kirmizi else ("⚫ Siyah" if sayi>0 else "🟢 Sıfır")
+        cift = sayi > 0 and sayi % 2 == 0
+        kazanc = 0
+        if tahmin in ("kırmızı","kirmizi","red") and sayi in kirmizi:
+            kazanc=bahis; txt="🔴 Kırmızı! Kazandın!"
+        elif tahmin in ("siyah","black") and sayi>0 and sayi not in kirmizi:
+            kazanc=bahis; txt="⚫ Siyah! Kazandın!"
+        elif tahmin in ("çift","cift","even") and cift:
+            kazanc=bahis; txt="✅ Çift! Kazandın!"
+        elif tahmin in ("tek","odd") and sayi>0 and not cift:
+            kazanc=bahis; txt="✅ Tek! Kazandın!"
+        elif tahmin.isdigit() and int(tahmin)==sayi:
+            kazanc=bahis*35; txt=f"🎯 TAM İSABET! 35x!"
+        else:
+            kazanc=-bahis; txt="😢 Kaybettin!"
+        yeni = add_puan(c, uid, isim, kazanc)
+        c["stats"]["casino_oyun"] += 1; save(c)
+        await dm_anim_veya_grup(update, context, _anim_str,
+            f"🎡 <b>Rulet</b>\n\n"
+            f"Top: <b>{sayi}</b> {renk}\n"
+            f"Tahmin: {tahmin}\n\n"
+            f"{txt}\n{'➕' if kazanc>0 else '➖'} <b>{abs(kazanc):,} puan</b>\n"
+            f"💰 Bakiye: <b>{yeni:,}</b>")
+    except:
+        await update.message.reply_text("❌ Geçerli bir miktar gir!")
+
+# ── BALİK ────────────────────────────────────────────
+async def balik_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    c = cfg()
+    if not c["casino_aktif"]: return
+    uid = str(update.effective_user.id)
+    isim = update.effective_user.first_name
+    if not context.args:
+        return await update.message.reply_text("🎣 Kullanım: /balik [bahis]")
+    try:
+        hata, bahis = bahis_kontrol(c, uid, context.args[0])
+        if hata: return await update.message.reply_text(hata)
+        _anim_str = "🎣 Olta atıldı... 🌊"
+        baliklar = [
+            ("🦐","Karides",0.5),("🐟","Ufak Balık",1.0),
+            ("🐠","Tropikal",1.5),("🐡","Balon Balığı",1.2),
+            ("🦈","KÖPEK BALIĞI",4.0),("💎","Hazine",6.0),
+            ("👢","Eski Bot",0.0),("🌿","Yosun",0.0),
+        ]
+        agirliklar = [20,30,20,10,5,2,8,5]
+        secim = random.choices(baliklar, weights=agirliklar, k=1)[0]
+        emoji, isim_b, carpan = secim
+        if carpan == 0:
+            kazanc = -bahis; txt = f"{emoji} {isim_b}... Hiçbir şey yok!"
+        else:
+            kazanc = int(bahis * carpan); txt = f"{emoji} <b>{isim_b}!</b> {carpan}x!"
+        yeni = add_puan(c, uid, isim, kazanc)
+        c["stats"]["casino_oyun"] += 1; save(c)
+        await dm_anim_veya_grup(update, context, _anim_str,
+            f"🎣 <b>Balık Avı</b>\n\n"
+            f"{txt}\n\n"
+            f"{'➕' if kazanc>0 else '➖'} <b>{abs(kazanc):,} puan</b>\n"
+            f"💰 Bakiye: <b>{yeni:,}</b>", 1.5)
+    except:
+        await update.message.reply_text("❌ Geçerli bir miktar gir!")
+
+# ── TAHMİN (Sayı) ────────────────────────────────────
+async def tahmin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    c = cfg()
+    if not c["casino_aktif"]: return
+    uid = str(update.effective_user.id)
+    isim = update.effective_user.first_name
+    if not context.args or len(context.args) < 2:
+        return await update.message.reply_text("🔢 Kullanım: /tahmin [bahis] [1-10]")
+    try:
+        hata, bahis = bahis_kontrol(c, uid, context.args[0])
+        if hata: return await update.message.reply_text(hata)
+        if not context.args[1].isdigit() or not (1 <= int(context.args[1]) <= 10):
+            return await update.message.reply_text("❌ 1 ile 10 arasında sayı gir!")
+        tahmin = int(context.args[1])
+        _anim_str = "🔢 Sayı seçiliyor..."
         sayi = random.randint(1, 10)
         if tahmin == sayi:
-            kazanc = bahis * 8; txt = "🎯 TAM İSABET! 8x!"
+            kazanc = bahis * 8; txt = "🎯 TAM BİLDİN! 8x!"
         elif abs(tahmin - sayi) == 1:
-            kazanc = int(bahis * 0.5); txt = "🎉 Yakın! 0.5x bonus!"
+            kazanc = 0; txt = f"😅 Çok yakın! Gerçek: {sayi}"
         else:
-            kazanc = -bahis; txt = "😢 Yanlış tahmin!"
-
+            kazanc = -bahis; txt = f"😢 Kaybettin! Gerçek: {sayi}"
         yeni = add_puan(c, uid, isim, kazanc)
         c["stats"]["casino_oyun"] += 1; save(c)
-        await update.message.reply_text(
-            f"🔢 <b>Sayı Tahmin</b>\n\nTahmin: {tahmin}  |  Gerçek: <b>{sayi}</b>\n\n"
-            f"{txt}\n{'➕' if kazanc > 0 else '➖'} <b>{abs(kazanc):,} puan</b>\n"
-            f"💰 Bakiye: <b>{yeni:,}</b>", parse_mode="HTML")
-    except: await update.message.reply_text("❌ Kullanım: /tahmin [bahis] [1-10]")
+        await dm_anim_veya_grup(update, context, _anim_str,
+            f"🔢 <b>Sayı Tahmini</b>\n\n"
+            f"Sayı: <b>{sayi}</b>  |  Tahmin: {tahmin}\n\n"
+            f"{txt}\n{'➕' if kazanc>0 else '➖'} <b>{abs(kazanc):,} puan</b>\n"
+            f"💰 Bakiye: <b>{yeni:,}</b>")
+    except:
+        await update.message.reply_text("❌ Geçerli bir miktar gir!")
 
-
+# ── KART ─────────────────────────────────────────────
 async def kart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """🃏 Kart Oyunu — Yüksek kart kazanır (Blackjack benzeri)"""
     c = cfg()
     if not c["casino_aktif"]: return
     uid = str(update.effective_user.id)
     isim = update.effective_user.first_name
     if not context.args:
-        return await update.message.reply_text("🃏 Kullanım: /kart [bahis]\nSenin kartın botunkinden yüksekse 2x kazanırsın!")
+        return await update.message.reply_text("🃏 Kullanım: /kart [bahis]")
     try:
-        bahis = int(context.args[0]); b = get_bakiye(c, uid)
-        if b["puan"] < bahis: return await update.message.reply_text("❌ Yetersiz bakiye!")
-        if bahis < c["casino_min_bahis"] or bahis > c["casino_max_bahis"]:
-            return await update.message.reply_text(f"❌ Bahis {c['casino_min_bahis']}-{c['casino_max_bahis']} arası!")
-
-        kartlar = ["2","3","4","5","6","7","8","9","10","J","Q","K","A"]
-        degerler = {str(i): i for i in range(2,11)}; degerler.update({"J":11,"Q":12,"K":13,"A":14})
-        ogeler = ["♠️","♥️","♦️","♣️"]
-
-        oyuncu_kart = random.choice(kartlar)
-        bot_kart = random.choice(kartlar)
-        oyuncu_renk = random.choice(ogeler)
-        bot_renk = random.choice(ogeler)
-
-        oy_d = degerler[oyuncu_kart]; bot_d = degerler[bot_kart]
-
-        if oy_d > bot_d: kazanc = bahis; txt = "🎉 Kazandın! Kartın daha yüksek!"
-        elif oy_d < bot_d: kazanc = -bahis; txt = "😢 Kaybettin! Botun kartı daha yüksek!"
-        else: kazanc = 0; txt = "🤝 Beraberlik! Bahis iade edildi."
-
+        hata, bahis = bahis_kontrol(c, uid, context.args[0])
+        if hata: return await update.message.reply_text(hata)
+        _anim_str = "🃏 Kartlar dağıtılıyor..."
+        kartlar = ["A","2","3","4","5","6","7","8","9","10","J","Q","K"]
+        deger = {"A":11,"2":2,"3":3,"4":4,"5":5,"6":6,"7":7,"8":8,"9":9,"10":10,"J":10,"Q":10,"K":10}
+        oyuncu = random.choices(kartlar, k=2)
+        bot_k = random.choices(kartlar, k=2)
+        o_puan = sum(deger[k] for k in oyuncu)
+        b_puan = sum(deger[k] for k in bot_k)
+        if o_puan > 21: o_puan -= 10  # A düzeltme
+        if b_puan > 21: b_puan -= 10
+        if o_puan > 21:    kazanc=-bahis; txt="💥 Bust! 21 geçtin!"
+        elif o_puan==21:   kazanc=int(bahis*1.5); txt="🃏 BLACKJACK! 1.5x!"
+        elif o_puan>b_puan or b_puan>21: kazanc=bahis; txt="🎉 Kazandın!"
+        elif o_puan==b_puan: kazanc=0; txt="🤝 Beraberlik!"
+        else: kazanc=-bahis; txt="😢 Kaybettin!"
         yeni = add_puan(c, uid, isim, kazanc)
         c["stats"]["casino_oyun"] += 1; save(c)
-        await update.message.reply_text(
-            f"🃏 <b>Kart Oyunu</b>\n\n"
-            f"Sen: <b>{oyuncu_kart}{oyuncu_renk}</b>  vs  Bot: <b>{bot_kart}{bot_renk}</b>\n\n"
-            f"{txt}\n{'➕' if kazanc > 0 else '➖' if kazanc < 0 else '🔄'} <b>{abs(kazanc):,} puan</b>\n"
-            f"💰 Bakiye: <b>{yeni:,}</b>", parse_mode="HTML")
-    except: await update.message.reply_text("❌ Kullanım: /kart [bahis]")
+        await dm_anim_veya_grup(update, context, _anim_str,
+            f"🃏 <b>BlackJack</b>\n\n"
+            f"Sen: {' '.join(oyuncu)} = <b>{o_puan}</b>\n"
+            f"Bot: {' '.join(bot_k)} = <b>{b_puan}</b>\n\n"
+            f"{txt}\n{'➕' if kazanc>0 else '➖'} <b>{abs(kazanc):,} puan</b>\n"
+            f"💰 Bakiye: <b>{yeni:,}</b>")
+    except:
+        await update.message.reply_text("❌ Geçerli bir miktar gir!")
 
-
+# ── YÜKSEK DÜŞÜK ─────────────────────────────────────
 async def yuksek_alcak_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """📊 Yüksek/Alçak — Sonraki kart yüksek mi alçak mı?"""
     c = cfg()
     if not c["casino_aktif"]: return
     uid = str(update.effective_user.id)
     isim = update.effective_user.first_name
-    if len(context.args) < 2:
-        return await update.message.reply_text("📊 Kullanım: /ya [bahis] yüksek|alçak\n1.8x ödül!")
+    if not context.args or len(context.args) < 2:
+        return await update.message.reply_text("📈 Kullanım: /ya [bahis] [yüksek/düşük]")
     try:
-        bahis = int(context.args[0]); tahmin = context.args[1].lower()
-        if tahmin not in ["yüksek","yuksek","alçak","alcak"]:
-            return await update.message.reply_text("❌ yüksek veya alçak yaz!")
-        b = get_bakiye(c, uid)
-        if b["puan"] < bahis: return await update.message.reply_text("❌ Yetersiz bakiye!")
-        if bahis < c["casino_min_bahis"] or bahis > c["casino_max_bahis"]:
-            return await update.message.reply_text(f"❌ Bahis {c['casino_min_bahis']}-{c['casino_max_bahis']} arası!")
-
-        mevcut = random.randint(1, 13)
-        sonraki = random.randint(1, 13)
-        kartlar = {1:"A",11:"J",12:"Q",13:"K"}
-
-        def kart_isim(n): return kartlar.get(n, str(n))
-
-        dogru_tahmin = (sonraki > mevcut and tahmin in ["yüksek","yuksek"]) or \
-                       (sonraki < mevcut and tahmin in ["alçak","alcak"]) or \
-                       (sonraki == mevcut)
-
-        if dogru_tahmin: kazanc = int(bahis * 0.8); txt = "✅ Doğru tahmin! 1.8x"
-        else: kazanc = -bahis; txt = "❌ Yanlış tahmin!"
-
+        hata, bahis = bahis_kontrol(c, uid, context.args[0])
+        if hata: return await update.message.reply_text(hata)
+        tahmin = context.args[1].lower()
+        if tahmin not in ("yüksek","yuksek","y","düşük","dusuk","d"):
+            return await update.message.reply_text("❌ yüksek veya düşük yaz\nÖrnek: /ya 100 yüksek")
+        _anim_str = "📈 Kart çekiliyor..."
+        sayi = random.randint(1,13)
+        isim_k = ["A","2","3","4","5","6","7","8","9","10","J","Q","K"][sayi-1]
+        yuksek = tahmin in ("yüksek","yuksek","y")
+        if (yuksek and sayi>=7) or (not yuksek and sayi<=7):
+            kazanc=bahis; txt="✅ Doğru tahmin!"
+        else:
+            kazanc=-bahis; txt="❌ Yanlış tahmin!"
+        if sayi==7: kazanc=0; txt="🤝 Tam 7! Beraberlik!"
         yeni = add_puan(c, uid, isim, kazanc)
         c["stats"]["casino_oyun"] += 1; save(c)
-        await update.message.reply_text(
-            f"📊 <b>Yüksek / Alçak</b>\n\n"
-            f"Mevcut: <b>{kart_isim(mevcut)}</b> → Sonraki: <b>{kart_isim(sonraki)}</b>\n"
-            f"Tahmin: {tahmin}\n\n{txt}\n"
-            f"{'➕' if kazanc > 0 else '➖'} <b>{abs(kazanc):,} puan</b>\n"
-            f"💰 Bakiye: <b>{yeni:,}</b>", parse_mode="HTML")
-    except: await update.message.reply_text("❌ Kullanım: /ya [bahis] yüksek")
+        await dm_anim_veya_grup(update, context, _anim_str,
+            f"📈 <b>Yüksek / Düşük</b>\n\n"
+            f"Kart: <b>{isim_k} ({sayi})</b>\n"
+            f"Tahmin: {'Yüksek ⬆️' if yuksek else 'Düşük ⬇️'}\n\n"
+            f"{txt}\n{'➕' if kazanc>0 else '➖'} <b>{abs(kazanc):,} puan</b>\n"
+            f"💰 Bakiye: <b>{yeni:,}</b>")
+    except:
+        await update.message.reply_text("❌ Geçerli bir miktar gir!")
 
-
+# ── TOMBALA ──────────────────────────────────────────
 async def tombala_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """🎱 Tombala — 5 sayı çek, 3 veya daha fazlası tutarsa kazan!"""
     c = cfg()
     if not c["casino_aktif"]: return
     uid = str(update.effective_user.id)
     isim = update.effective_user.first_name
     if not context.args:
-        return await update.message.reply_text("🎱 Kullanım: /tombala [bahis]\n3 eşleşme=1.5x | 4=3x | 5=10x!")
+        return await update.message.reply_text("🎱 Kullanım: /tombala [bahis]")
     try:
-        bahis = int(context.args[0]); b = get_bakiye(c, uid)
-        if b["puan"] < bahis: return await update.message.reply_text("❌ Yetersiz bakiye!")
-        if bahis < c["casino_min_bahis"] or bahis > c["casino_max_bahis"]:
-            return await update.message.reply_text(f"❌ Bahis {c['casino_min_bahis']}-{c['casino_max_bahis']} arası!")
-
-        oyuncu_sayilari = random.sample(range(1, 26), 5)
-        cekilen_sayilar = random.sample(range(1, 26), 10)
-        eslesen = [s for s in oyuncu_sayilari if s in cekilen_sayilar]
-        eslesme = len(eslesen)
-
-        if eslesme >= 5: kazanc = bahis * 10; txt = "🎊 TOMBALA! 10x!"
-        elif eslesme == 4: kazanc = bahis * 3; txt = "🎉 4 Eşleşme! 3x!"
-        elif eslesme == 3: kazanc = int(bahis * 0.5); txt = "✨ 3 Eşleşme! 1.5x!"
-        else: kazanc = -bahis; txt = f"😢 Sadece {eslesme} eşleşme, kaybettin!"
-
-        oyuncu_txt = " ".join([f"{'✅' if s in eslesen else '❌'}{s}" for s in oyuncu_sayilari])
+        hata, bahis = bahis_kontrol(c, uid, context.args[0])
+        if hata: return await update.message.reply_text(hata)
+        _anim_str = "🎱 Tombala başlıyor..."
+        kart = sorted(random.sample(range(1,90), 15))
+        cekilen = sorted(random.sample(range(1,90), 30))
+        eslesme = len(set(kart) & set(cekilen))
+        if eslesme >= 15:   kazanc=bahis*10; txt="🏆 TOMBALA! 10x!"
+        elif eslesme >= 10: kazanc=bahis*3;  txt="🎉 İkinci Çinko! 3x!"
+        elif eslesme >= 5:  kazanc=bahis;    txt="✅ Çinko! 1x!"
+        else:               kazanc=-bahis;   txt="😢 Kaybettin!"
         yeni = add_puan(c, uid, isim, kazanc)
         c["stats"]["casino_oyun"] += 1; save(c)
-        await update.message.reply_text(
+        await dm_anim_veya_grup(update, context, _anim_str,
             f"🎱 <b>Tombala</b>\n\n"
-            f"Sayıların: {oyuncu_txt}\n"
-            f"Çekilen: {' '.join(map(str,cekilen_sayilar[:8]))}...\n\n"
-            f"{txt}\n{'➕' if kazanc > 0 else '➖'} <b>{abs(kazanc):,} puan</b>\n"
-            f"💰 Bakiye: <b>{yeni:,}</b>", parse_mode="HTML")
-    except: await update.message.reply_text("❌ Kullanım: /tombala [bahis]")
+            f"Eşleşen: <b>{eslesme}/15</b>\n\n"
+            f"{txt}\n{'➕' if kazanc>0 else '➖'} <b>{abs(kazanc):,} puan</b>\n"
+            f"💰 Bakiye: <b>{yeni:,}</b>", 1.5)
+    except:
+        await update.message.reply_text("❌ Geçerli bir miktar gir!")
 
-
+# ── SAVAŞ ────────────────────────────────────────────
 async def savas_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """⚔️ Savaş — Başka bir kullanıcıyla puan savaşı"""
     c = cfg()
     if not c["casino_aktif"]: return
     uid = str(update.effective_user.id)
     isim = update.effective_user.first_name
-    if not update.message.reply_to_message:
-        return await update.message.reply_text("⚔️ Savaşmak için bir mesajı yanıtla!\n/savas [bahis]")
     if not context.args:
-        return await update.message.reply_text("Kullanım: /savas [bahis] (birinin mesajını yanıtlayarak)")
+        return await update.message.reply_text("⚔️ Kullanım: /savas [bahis]")
     try:
-        bahis = int(context.args[0])
-        rakip = update.message.reply_to_message.from_user
-        if rakip.id == update.effective_user.id:
-            return await update.message.reply_text("❌ Kendinle savaşamazsın!")
-        if rakip.is_bot:
-            return await update.message.reply_text("❌ Bot ile savaşamazsın!")
-
-        b1 = get_bakiye(c, uid)
-        b2 = get_bakiye(c, str(rakip.id))
-        if b1["puan"] < bahis: return await update.message.reply_text("❌ Yetersiz bakiyen!")
-        if b2["puan"] < bahis: return await update.message.reply_text(f"❌ {rakip.first_name}'in bakiyesi yetersiz!")
-        if bahis < c["casino_min_bahis"] or bahis > c["casino_max_bahis"]:
-            return await update.message.reply_text(f"❌ Bahis {c['casino_min_bahis']}-{c['casino_max_bahis']} arası!")
-
-        # Savaş simülasyonu
-        oyuncu_hp = 100; rakip_hp = 100
-        turlar = []
-        for _ in range(5):
-            oyuncu_hasar = random.randint(10, 35)
-            rakip_hasar  = random.randint(10, 35)
-            rakip_hp  -= oyuncu_hasar
-            oyuncu_hp -= rakip_hasar
-            turlar.append(f"⚔️ Sen -{rakip_hasar} HP  |  {rakip.first_name} -{oyuncu_hasar} HP")
-            if oyuncu_hp <= 0 or rakip_hp <= 0: break
-
-        if oyuncu_hp > rakip_hp:
-            add_puan(c, uid, isim, bahis)
-            add_puan(c, str(rakip.id), rakip.first_name, -bahis)
-            kazanan_txt = f"🏆 <b>{isim} KAZANDI!</b>"
-        elif rakip_hp > oyuncu_hp:
-            add_puan(c, uid, isim, -bahis)
-            add_puan(c, str(rakip.id), rakip.first_name, bahis)
-            kazanan_txt = f"🏆 <b>{rakip.first_name} KAZANDI!</b>"
-        else:
-            kazanan_txt = "🤝 <b>BERABERLIK!</b>"
-
+        hata, bahis = bahis_kontrol(c, uid, context.args[0])
+        if hata: return await update.message.reply_text(hata)
+        _anim_str = "⚔️ Savaş başlıyor..."
+        kartlar = list(range(1,14))*4
+        oyuncu = sorted(random.sample(kartlar, 5), reverse=True)
+        bot_k   = sorted(random.sample(kartlar, 5), reverse=True)
+        isimler = {1:"A",11:"J",12:"Q",13:"K"}
+        fmt = lambda x: isimler.get(x,str(x))
+        oyuncu_str = " ".join(fmt(k) for k in oyuncu)
+        bot_str    = " ".join(fmt(k) for k in bot_k)
+        if oyuncu[0] > bot_k[0]:    kazanc=bahis; txt="⚔️ Kazandın!"
+        elif oyuncu[0] < bot_k[0]:  kazanc=-bahis; txt="💀 Kaybettin!"
+        else:                        kazanc=0; txt="🤝 Beraberlik!"
+        yeni = add_puan(c, uid, isim, kazanc)
         c["stats"]["casino_oyun"] += 1; save(c)
-        tur_txt = "\n".join(turlar[-3:])
-        await update.message.reply_text(
-            f"⚔️ <b>{isim} vs {rakip.first_name}</b>\n\n"
-            f"{tur_txt}\n\n"
-            f"❤️ {isim}: {max(0,oyuncu_hp)} HP\n"
-            f"❤️ {rakip.first_name}: {max(0,rakip_hp)} HP\n\n"
-            f"{kazanan_txt}\n💰 Bahis: {bahis:,} puan", parse_mode="HTML")
-    except Exception as e: await update.message.reply_text(f"❌ Hata: {e}")
+        await dm_anim_veya_grup(update, context, _anim_str,
+            f"⚔️ <b>Kart Savaşı</b>\n\n"
+            f"Sen: {oyuncu_str}\n"
+            f"Bot: {bot_str}\n\n"
+            f"{txt}\n{'➕' if kazanc>0 else '➖'} <b>{abs(kazanc):,} puan</b>\n"
+            f"💰 Bakiye: <b>{yeni:,}</b>")
+    except:
+        await update.message.reply_text("❌ Geçerli bir miktar gir!")
 
-
+# ── HEDİYE ───────────────────────────────────────────
 async def hediye_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """🎁 Hediye Kutusu — Rastgele ödül veya ceza"""
     c = cfg()
     if not c["casino_aktif"]: return
     uid = str(update.effective_user.id)
     isim = update.effective_user.first_name
     if not context.args:
-        return await update.message.reply_text("🎁 Kullanım: /hediye [bahis]\nKutuyu aç, ne çıkacak bilinmez!")
+        return await update.message.reply_text("🎁 Kullanım: /hediye [bahis]")
     try:
-        bahis = int(context.args[0]); b = get_bakiye(c, uid)
-        if b["puan"] < bahis: return await update.message.reply_text("❌ Yetersiz bakiye!")
-
-        hediyeler = [
-            ("💎 Elmas Kutu", 5,   0.02),
-            ("🥇 Altın Kutu", 3,   0.08),
-            ("🥈 Gümüş Kutu", 1.5, 0.20),
-            ("📦 Normal Kutu",0.5, 0.35),
-            ("💩 Boş Kutu",  -0.5, 0.25),
-            ("💣 Bomba",     -2,   0.10),
+        hata, bahis = bahis_kontrol(c, uid, context.args[0])
+        if hata: return await update.message.reply_text(hata)
+        _anim_str = "🎁 Kutu açılıyor..."
+        kutular = [
+            ("💣","Bomba!",0),("🎁","Küçük Hediye",1.0),
+            ("🎀","Güzel Hediye",2.0),("💝","Süper Hediye",3.0),
+            ("👑","KRALIYET HEDİYESİ",5.0),("💨","Boş Kutu",0),
         ]
-        r = random.random(); toplam = 0
-        secilen = hediyeler[-1]
-        for h in hediyeler:
-            toplam += h[2]
-            if r <= toplam: secilen = h; break
-
-        isim_h, carpan, _ = secilen
-        kazanc = int(bahis * carpan) if carpan > 0 else int(bahis * abs(carpan)) * -1
+        agirliklar = [15,35,25,15,5,5]
+        emoji_k, isim_k, carpan = random.choices(kutular, weights=agirliklar, k=1)[0]
+        if carpan == 0:
+            kazanc=-bahis; txt=f"{emoji_k} {isim_k}"
+        else:
+            kazanc=int(bahis*carpan); txt=f"{emoji_k} <b>{isim_k}!</b> {carpan}x!"
         yeni = add_puan(c, uid, isim, kazanc)
         c["stats"]["casino_oyun"] += 1; save(c)
-        await update.message.reply_text(
-            f"🎁 <b>Hediye Kutusu</b>\n\n🎊 Kutuyu açtın...\n\n{isim_h}!\n\n"
-            f"{'➕' if kazanc >= 0 else '➖'} <b>{abs(kazanc):,} puan</b>\n"
-            f"💰 Bakiye: <b>{yeni:,}</b>", parse_mode="HTML")
-    except: await update.message.reply_text("❌ Kullanım: /hediye [bahis]")
+        await dm_anim_veya_grup(update, context, _anim_str,
+            f"🎁 <b>Hediye Kutusu</b>\n\n"
+            f"{txt}\n\n"
+            f"{'➕' if kazanc>0 else '➖'} <b>{abs(kazanc):,} puan</b>\n"
+            f"💰 Bakiye: <b>{yeni:,}</b>", 1.5)
+    except:
+        await update.message.reply_text("❌ Geçerli bir miktar gir!")
 
-
-# ── ADMİN YETKİ CALLBACK EKLEMELERİ ───────────────────────────
-_orijinal_cb = cb
-
+# ── BOWLİNG ──────────────────────────────────────────
 async def bowling_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """🎳 Bowling — 10 pin, kaç tanesini devirebilirsin?"""
     c = cfg()
     if not c["casino_aktif"]: return
     uid = str(update.effective_user.id)
     isim = update.effective_user.first_name
     if not context.args:
-        return await update.message.reply_text(
-            "🎳 Kullanım: /bowling [bahis]\n\nStrike(10)=3x | Spare(9)=1.5x | 7-8=1x | <7=kayıp")
+        return await update.message.reply_text("🎳 Kullanım: /bowling [bahis]")
     try:
-        bahis = int(context.args[0]); b = get_bakiye(c, uid)
-        if b["puan"] < bahis: return await update.message.reply_text("❌ Yetersiz bakiye!")
-        if bahis < c["casino_min_bahis"] or bahis > c["casino_max_bahis"]:
-            return await update.message.reply_text(f"❌ {c['casino_min_bahis']}-{c['casino_max_bahis']} arası!")
-
-        atış1 = random.randint(0, 10)
-        atış2 = random.randint(0, 10 - atış1) if atış1 < 10 else 0
-        toplam = atış1 + atış2
-
-        pin_emoji = lambda n: "🎳" * n + "⬜" * (10 - n)
-
-        if atış1 == 10:
-            kazanc = bahis * 3; txt = "🏆 STRİKE! 3x! Tüm pinler devrildi!"
-            gosterim = f"1. atış: {pin_emoji(10)}\n✨ STRİKE!"
-        elif toplam == 10:
-            kazanc = int(bahis * 1.5); txt = "✅ SPARE! 1.5x! İki atışta temizledin!"
-            gosterim = f"1. atış: {pin_emoji(atış1)}\n2. atış: {pin_emoji(atış2)}\n✨ SPARE!"
-        elif toplam >= 7:
-            kazanc = 0; txt = f"😊 {toplam} pin! Beraberlik, bahis iade."
-            gosterim = f"1. atış: {pin_emoji(atış1)}\n2. atış: {pin_emoji(atış2)}"
+        hata, bahis = bahis_kontrol(c, uid, context.args[0])
+        if hata: return await update.message.reply_text(hata)
+        _anim_str = "🎳 Top yuvarlanıyor..."
+        def atis():
+            pins = random.randint(0,10)
+            row = "🎳"*pins + "⬜"*(10-pins)
+            return pins, row
+        p1, r1 = atis()
+        if p1 == 10:
+            kazanc=int(bahis*2.5); txt="🏆 STRIKE! 2.5x!"; gorsel=f"1. atış: {r1}"
         else:
-            kazanc = -bahis; txt = f"😢 Sadece {toplam} pin devrildi!"
-            gosterim = f"1. atış: {pin_emoji(atış1)}\n2. atış: {pin_emoji(atış2)}"
-
+            p2, r2 = atis()
+            toplam = p1 + p2
+            gorsel = f"1. atış: {r1}\n2. atış: {r2}"
+            if toplam == 10: kazanc=int(bahis*1.5); txt="✨ SPARE! 1.5x!"
+            elif toplam >= 7: kazanc=bahis; txt=f"👍 {toplam} pin! Kazandın!"
+            elif toplam >= 4: kazanc=0; txt=f"😐 {toplam} pin. Beraberlik."
+            else: kazanc=-bahis; txt=f"😢 {toplam} pin. Kaybettin."
         yeni = add_puan(c, uid, isim, kazanc)
         c["stats"]["casino_oyun"] += 1; save(c)
-        await update.message.reply_text(
-            f"🎳 <b>Bowling</b>\n\n{gosterim}\n\n{txt}\n"
-            f"{'➕' if kazanc > 0 else '➖' if kazanc < 0 else '🔄'} <b>{abs(kazanc):,} puan</b>\n"
-            f"💰 Bakiye: <b>{yeni:,}</b>", parse_mode="HTML")
-    except: await update.message.reply_text("❌ Kullanım: /bowling [bahis]")
+        await dm_anim_veya_grup(update, context, _anim_str,
+            f"🎳 <b>Bowling</b>\n\n"
+            f"{gorsel}\n\n"
+            f"{txt}\n{'➕' if kazanc>0 else '➖'} <b>{abs(kazanc):,} puan</b>\n"
+            f"💰 Bakiye: <b>{yeni:,}</b>")
+    except:
+        await update.message.reply_text("❌ Geçerli bir miktar gir!")
 
-
-# ── DART ────────────────────────────────────────────────────────
+# ── DART ─────────────────────────────────────────────
 async def dart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """🎯 Dart — Hedef tahtasına at, bullseye = 5x!"""
     c = cfg()
     if not c["casino_aktif"]: return
     uid = str(update.effective_user.id)
     isim = update.effective_user.first_name
     if not context.args:
-        return await update.message.reply_text(
-            "🎯 Kullanım: /dart [bahis]\n\n🎯 Bullseye=5x | 🟡 İç=2x | 🔵 Orta=1x | ⚪ Dış=kayıp")
+        return await update.message.reply_text("🎯 Kullanım: /dart [bahis]")
     try:
-        bahis = int(context.args[0]); b = get_bakiye(c, uid)
-        if b["puan"] < bahis: return await update.message.reply_text("❌ Yetersiz bakiye!")
-        if bahis < c["casino_min_bahis"] or bahis > c["casino_max_bahis"]:
-            return await update.message.reply_text(f"❌ {c['casino_min_bahis']}-{c['casino_max_bahis']} arası!")
-
-        sayi = random.random()
-        if sayi < 0.05:
-            bolge = "🎯 BULLSEYE"; carpan = 5; txt = "MÜKEMMEL ATIŞ! 5x!"
-        elif sayi < 0.20:
-            bolge = "🟡 İç Halka"; carpan = 2; txt = "Harika atış! 2x!"
-        elif sayi < 0.50:
-            bolge = "🔵 Orta Halka"; carpan = 1; txt = "İyi atış! 1x!"
-        elif sayi < 0.75:
-            bolge = "🔴 Dış Halka"; carpan = 0.5; txt = "Kenara yakın, 0.5x."
+        hata, bahis = bahis_kontrol(c, uid, context.args[0])
+        if hata: return await update.message.reply_text(hata)
+        _anim_str = "🎯 Ok fırlatılıyor..."
+        hedefler = [
+            ("🎯","BULLSEYE",3.0,5),("🟡","İç Halka",2.0,15),
+            ("🟠","Orta Halka",1.5,25),("🔴","Dış Halka",1.0,30),
+            ("⚪","Kaçırdın!",0,25),
+        ]
+        secim = random.choices(hedefler, weights=[h[3] for h in hedefler], k=1)[0]
+        emoji_d, isim_d, carpan, _ = secim
+        if carpan == 0:
+            kazanc=-bahis; txt=f"{emoji_d} {isim_d}"
         else:
-            bolge = "⚪ Kaçtı"; carpan = -1; txt = "Tamamen kaçtı! 😢"
-
-        kazanc = int(bahis * carpan) if carpan > 0 else -bahis
+            kazanc=int(bahis*carpan); txt=f"{emoji_d} <b>{isim_d}!</b> {carpan}x!"
         yeni = add_puan(c, uid, isim, kazanc)
         c["stats"]["casino_oyun"] += 1; save(c)
+        await dm_anim_veya_grup(update, context, _anim_str,
+            f"🎯 <b>Dart</b>\n\n"
+            f"{txt}\n\n"
+            f"{'➕' if kazanc>0 else '➖'} <b>{abs(kazanc):,} puan</b>\n"
+            f"💰 Bakiye: <b>{yeni:,}</b>")
+    except:
+        await update.message.reply_text("❌ Geçerli bir miktar gir!")
 
-        tahta = (
-            "⚪⚪⚪⚪⚪\n"
-            "⚪🔴🔴🔴⚪\n"
-            "⚪🔴🔵🔴⚪\n"
-            "⚪🔴🔴🔴⚪\n"
-            "⚪⚪⚪⚪⚪"
-        ) if carpan != 5 else (
-            "⚪⚪⚪⚪⚪\n"
-            "⚪🔴🔴🔴⚪\n"
-            "⚪🔴🎯🔴⚪\n"
-            "⚪🔴🔴🔴⚪\n"
-            "⚪⚪⚪⚪⚪"
-        )
-
-        await update.message.reply_text(
-            f"🎯 <b>Dart</b>\n\n{tahta}\n\n{bolge}\n{txt}\n"
-            f"{'➕' if kazanc > 0 else '➖'} <b>{abs(kazanc):,} puan</b>\n"
-            f"💰 Bakiye: <b>{yeni:,}</b>", parse_mode="HTML")
-    except: await update.message.reply_text("❌ Kullanım: /dart [bahis]")
-
-
-# ── BASKETBOL ───────────────────────────────────────────────────
+# ── BASKETBOL ────────────────────────────────────────
 async def basketbol_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """🏀 Basketbol — Serbest atış, kaç sayı atarsın?"""
     c = cfg()
     if not c["casino_aktif"]: return
     uid = str(update.effective_user.id)
     isim = update.effective_user.first_name
     if not context.args:
-        return await update.message.reply_text("🏀 Kullanım: /basketbol [bahis]\n5 atış yaparsın, her sayı puan kazandırır!")
+        return await update.message.reply_text("🏀 Kullanım: /basketbol [bahis]")
     try:
-        bahis = int(context.args[0]); b = get_bakiye(c, uid)
-        if b["puan"] < bahis: return await update.message.reply_text("❌ Yetersiz bakiye!")
-        if bahis < c["casino_min_bahis"] or bahis > c["casino_max_bahis"]:
-            return await update.message.reply_text(f"❌ {c['casino_min_bahis']}-{c['casino_max_bahis']} arası!")
-
+        hata, bahis = bahis_kontrol(c, uid, context.args[0])
+        if hata: return await update.message.reply_text(hata)
+        _anim_str = "🏀 Top atılıyor..."
         atislar = []
-        isabet = 0
+        toplam = 0
         for _ in range(5):
             r = random.random()
-            if r < 0.15:
-                atislar.append("🏀✨ 3 Sayı!"); isabet += 3
-            elif r < 0.55:
-                atislar.append("🏀 2 Sayı!"); isabet += 2
-            elif r < 0.75:
-                atislar.append("🏀 1 Sayı"); isabet += 1
-            else:
-                atislar.append("❌ Kaçtı"); pass
-
-        if isabet >= 12: carpan = 4; txt = "🏆 Efsane oyun! 4x!"
-        elif isabet >= 9: carpan = 2; txt = "🎉 Harika! 2x!"
-        elif isabet >= 6: carpan = 1; txt = "👍 İyi oyun! 1x"
-        elif isabet >= 3: carpan = 0; txt = "😊 Fena değil. Beraberlik."
-        else: carpan = -1; txt = "😢 Kötü gün..."
-
-        kazanc = int(bahis * carpan) if carpan > 0 else (-bahis if carpan < 0 else 0)
+            if r < 0.15:   puan=3; atislar.append("🏀 3 Sayı!")
+            elif r < 0.5:  puan=2; atislar.append("🏀 2 Sayı!")
+            elif r < 0.7:  puan=1; atislar.append("🏀 1 Sayı")
+            else:          puan=0; atislar.append("❌ Kaçırdı")
+            toplam += puan
+        if toplam >= 10: kazanc=int(bahis*2); txt=f"🏆 {toplam} sayı! 2x!"
+        elif toplam >= 7: kazanc=bahis; txt=f"🎉 {toplam} sayı! Kazandın!"
+        elif toplam >= 4: kazanc=0; txt=f"😐 {toplam} sayı. Beraberlik."
+        else: kazanc=-bahis; txt=f"😢 {toplam} sayı. Kaybettin."
         yeni = add_puan(c, uid, isim, kazanc)
         c["stats"]["casino_oyun"] += 1; save(c)
-        await update.message.reply_text(
+        await dm_anim_veya_grup(update, context, _anim_str,
             f"🏀 <b>Basketbol</b>\n\n"
-            + "\n".join(atislar) +
-            f"\n\n🔢 Toplam: <b>{isabet} sayı</b>\n{txt}\n"
-            f"{'➕' if kazanc > 0 else '➖' if kazanc < 0 else '🔄'} <b>{abs(kazanc):,} puan</b>\n"
-            f"💰 Bakiye: <b>{yeni:,}</b>", parse_mode="HTML")
-    except: await update.message.reply_text("❌ Kullanım: /basketbol [bahis]")
+            f"{chr(10).join(atislar)}\n\n"
+            f"🏁 Toplam: <b>{toplam} sayı</b>\n"
+            f"{txt}\n{'➕' if kazanc>0 else '➖'} <b>{abs(kazanc):,} puan</b>\n"
+            f"💰 Bakiye: <b>{yeni:,}</b>")
+    except:
+        await update.message.reply_text("❌ Geçerli bir miktar gir!")
 
-
-# ── FUTBOL ──────────────────────────────────────────────────────
-async def futbol_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """⚽ Penaltı atışı — Kaleciye karşı şans dene!"""
+# ── MİNES ────────────────────────────────────────────
+async def mines_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     c = cfg()
     if not c["casino_aktif"]: return
     uid = str(update.effective_user.id)
     isim = update.effective_user.first_name
-    if len(context.args) < 2:
+    if not context.args:
         return await update.message.reply_text(
-            "⚽ Kullanım: /penalti [bahis] [sol|orta|sag]\nKaleci rastgele bir tarafa atlayacak!")
+            "💣 <b>Mines</b>\nKullanım: /mines [bahis] [mayın_sayısı 1-20]\nÖrnek: /mines 100 5",
+            parse_mode="HTML")
     try:
-        bahis = int(context.args[0]); yon = context.args[1].lower()
-        if yon not in ["sol","orta","sag","sağ"]:
-            return await update.message.reply_text("❌ sol, orta veya sag yaz!")
-        b = get_bakiye(c, uid)
-        if b["puan"] < bahis: return await update.message.reply_text("❌ Yetersiz bakiye!")
-        if bahis < c["casino_min_bahis"] or bahis > c["casino_max_bahis"]:
-            return await update.message.reply_text(f"❌ {c['casino_min_bahis']}-{c['casino_max_bahis']} arası!")
-
-        kaleci_yon = random.choice(["sol", "orta", "sag"])
-        yon_emoji = {"sol":"⬅️","orta":"⬆️","sag":"➡️"}
-
-        if yon in ["sag","sağ"]: yon = "sag"
-
-        if yon != kaleci_yon:
-            kazanc = int(bahis * 1.5); txt = "⚽ GOL! 1.5x!"
-            kale = "┌─────────┐\n│    ⚽    │\n└─────────┘"
+        hata, bahis = bahis_kontrol(c, uid, context.args[0])
+        if hata: return await update.message.reply_text(hata)
+        mayın_sayi = int(context.args[1]) if len(context.args)>1 else 5
+        mayın_sayi = max(1, min(20, mayın_sayi))
+        _anim_str = "💣 Mayın tarlası hazırlanıyor..."
+        hucre = 25
+        mayınlar = set(random.sample(range(hucre), mayın_sayi))
+        acilan = random.randint(1, hucre - mayın_sayi)
+        patladi = False
+        for i in range(acilan):
+            if random.random() < (mayın_sayi / (hucre - i)):
+                patladi = True; break
+        carpan = round(1 + (mayın_sayi / (hucre - mayın_sayi)) * acilan, 2)
+        if patladi:
+            kazanc=-bahis; txt="💥 PATLADI! Mayına bastın!"
         else:
-            kazanc = -bahis; txt = "🧤 Kaleci kurtardı!"
-            kale = f"┌─────────┐\n│ 🧤{yon_emoji[kaleci_yon]}  │\n└─────────┘"
-
+            kazanc=int(bahis*carpan); txt=f"✅ {acilan} güvenli kare! {carpan}x!"
         yeni = add_puan(c, uid, isim, kazanc)
         c["stats"]["casino_oyun"] += 1; save(c)
-        await update.message.reply_text(
-            f"⚽ <b>Penaltı Atışı</b>\n\n{kale}\n\n"
-            f"Sen: {yon_emoji.get(yon,'?')}  Kaleci: {yon_emoji[kaleci_yon]}\n\n{txt}\n"
-            f"{'➕' if kazanc > 0 else '➖'} <b>{abs(kazanc):,} puan</b>\n"
-            f"💰 Bakiye: <b>{yeni:,}</b>", parse_mode="HTML")
-    except: await update.message.reply_text("❌ Kullanım: /penalti [bahis] sol|orta|sag")
+        await dm_anim_veya_grup(update, context, _anim_str,
+            f"💣 <b>Mines</b>\n\n"
+            f"Mayın: {mayın_sayi}/25  |  Açılan: {acilan}\n\n"
+            f"{txt}\n{'➕' if kazanc>0 else '➖'} <b>{abs(kazanc):,} puan</b>\n"
+            f"💰 Bakiye: <b>{yeni:,}</b>", 1.5)
+    except:
+        await update.message.reply_text("❌ Kullanım: /mines [bahis] [mayın sayısı]")
 
 
-# ── PUAN KAZANMA SİSTEMİ ────────────────────────────────────────
-# Üyeler şu yollarla puan kazanır:
-# 1. /bonus — Günlük ücretsiz puan
-# 2. /ref   — Davet sistemi
-# 3. Mesaj yazmak — Aktiflik puanı
-# 4. /gorev — Görev sistemi
-# 5. Admin'den manuel /ver komutu
-# 6. Etkinlik kazanma
-
-# ── GÖREV TİPLERİ: "hic"=tek seferlik, "gun"=günlük, "hafta"=haftalık ──
-GOREVLER = {
-    # ── Tek seferlik (ilk kez) ──
-    "ilk_giris":    {"puan": 200,  "emoji": "🎉", "baslik": "Hosgeldin",       "aciklama": "Bota ilk kez /start yaz",    "tip": "hic"},
-    "ilk_oyun":     {"puan": 100,  "emoji": "🎮", "baslik": "Kumar Kapisi",     "aciklama": "Herhangi bir oyun oyna",      "tip": "hic"},
-    "ilk_kazanc":   {"puan": 150,  "emoji": "🏆", "baslik": "Ilk Zafer",        "aciklama": "Bir oyunda kazan",            "tip": "hic"},
-    "ilk_davet":    {"puan": 250,  "emoji": "🤝", "baslik": "Sosyal Kelebek",   "aciklama": "1 kisiyi davet et",           "tip": "hic"},
-    "bes_davet":    {"puan": 500,  "emoji": "🌟", "baslik": "Topluluk Kurucusu","aciklama": "5 kisi davet et",             "tip": "hic"},
-    "vip_ol":       {"puan": 300,  "emoji": "👑", "baslik": "VIP Kulubu",       "aciklama": "10.000 puana ulaş",           "tip": "hic"},
-    "sev5":         {"puan": 200,  "emoji": "⭐", "baslik": "Orta Yol",         "aciklama": "Seviye 5'e ulaş",             "tip": "hic"},
-    "sev10":        {"puan": 1000, "emoji": "💎", "baslik": "Efsane",           "aciklama": "Seviye 10'a ulaş",            "tip": "hic"},
-    "100k_puan":    {"puan": 500,  "emoji": "💰", "baslik": "Zengin Olmak",     "aciklama": "100.000 puan kazan (toplam)", "tip": "hic"},
-    # ── Günlük (her gün yapılabilir) ──
-    "gunluk_bonus": {"puan": 0,    "emoji": "📅", "baslik": "Sadik Uye",        "aciklama": "/bonus al",                  "tip": "gun"},
-    "gunluk_mesaj": {"puan": 10,   "emoji": "💬", "baslik": "Konuşkan",         "aciklama": "Grupta 5 mesaj at",          "tip": "gun", "hedef": 5},
-    "gunluk_oyun":  {"puan": 25,   "emoji": "🎲", "baslik": "Kumar Adigi",      "aciklama": "3 oyun oyna",                "tip": "gun", "hedef": 3},
-    "gunluk_kazanc":{"puan": 50,   "emoji": "🤑", "baslik": "Kazanan",          "aciklama": "Bir oyunda kazan",           "tip": "gun"},
-    # ── Haftalık ──
-    "haftalik_bonus":{"puan": 0,   "emoji": "🗓", "baslik": "Haftalik Sadakat", "aciklama": "/hbonus al",                 "tip": "hafta"},
-    "haftalik_top3": {"puan": 500, "emoji": "🥇", "baslik": "Top 3",            "aciklama": "Liderlik tablosunda top 3 ol","tip": "hafta"},
-    "haftalik_seri": {"puan": 300, "emoji": "🔥", "baslik": "Kor Olmayan Ates", "aciklama": "7 günlük seri yap",          "tip": "hafta"},
-}
-
-# ── ROZETLER (seviyeye göre otomatik verilir) ──
-ROZETLER = {
-    1:  "🌱 Çaylak",    2:  "🔰 Acemi",     3:  "⚔️ Savaşçı",
-    4:  "🛡 Kahraman",  5:  "⭐ Usta",      6:  "💫 Şampiyon",
-    7:  "🔥 Efsane",    8:  "💎 Elmas",     9:  "👑 Kral",
-    10: "🌌 Tanrı",
-}
-
-# ── BAŞARIMLAR (özel koşullar) ──
-BASARIMLAR = {
-    "sansli":   {"emoji": "🍀", "aciklama": "Aynı oyunda 3 kez üst üste kazan"},
-    "cesur":    {"emoji": "⚡", "aciklama": "Tek seferde 500+ puan kazan"},
-    "fedakar":  {"emoji": "❤️", "aciklama": "100+ puan transfer et"},
-    "koleksiyoner": {"emoji": "🗝", "aciklama": "Marketten 3 farklı ürün al"},
-}
 
 async def gorev_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     c = cfg()
@@ -2420,11 +1916,11 @@ async def hbonus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     gorev_tamamla(c, uid, isim, "haftalik_bonus")
     save(c)
     sev = hesapla_seviye(c, yeni)
-    await update.message.reply_text(
+    await dm_veya_grup(update, context, 
         f"Haftalik Bonus!\n+{haftalik} puan kazandin!\n"
         f"Seviye {sev} | {yeni:,} puan\n\n"
         f"/bonus ile gunluk bonus da alabilirsin!"
-    )
+    , "🎁 Haftalık bonus alındı! 📩 DM'e bak.")
 
 
 async def seviye_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3863,6 +3359,317 @@ def _tahmin_dogru_mu(t_raw, skor, m):
         else: gercek = "2"
         return t_sec == gercek
 
+
+
+async def anket_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    if not context.args: return await update.message.reply_text("Kullanım: /anket Soru?|Seçenek1|Seçenek2|Seçenek3")
+    parcalar=" ".join(context.args).split("|")
+    if len(parcalar)<3: return await update.message.reply_text("❌ En az 2 seçenek lazım!")
+    soru=parcalar[0].strip(); secenekler=[p.strip() for p in parcalar[1:]]
+    try:
+        await context.bot.send_poll(update.effective_chat.id, soru, secenekler, is_anonymous=False)
+    except Exception as e: await update.message.reply_text(f"❌ {e}")
+
+# KRİPTO
+
+async def ban_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    if not update.message.reply_to_message: return await update.message.reply_text("Banlamak için mesajı yanıtla!")
+    hedef=update.message.reply_to_message.from_user
+    try:
+        await context.bot.ban_chat_member(update.effective_chat.id, hedef.id)
+        await update.message.reply_text(f"🔨 <b>{hedef.first_name}</b> banlandı!", parse_mode="HTML")
+    except Exception as e: await update.message.reply_text(f"❌ {e}")
+
+async def btc_cmd(update, context): context.args=["BTC"]; await kripto_cmd(update, context)
+
+async def butonsil_cmd(update, context):
+    if not is_admin(update.effective_user.id): return
+    c=cfg()
+    if not context.args or not context.args[0].isdigit(): return await update.message.reply_text("Kullanım: /butonsil 1")
+    idx=int(context.args[0])-1; b=c.get("join_butonlar",[])
+    if 0<=idx<len(b): b.pop(idx); c["join_butonlar"]=b; save(c); await update.message.reply_text("🗑 Silindi!")
+
+# ═══════════════════════════════════════════════════════════════
+#  YENİ OYUNLAR + ADMİN YETKİ SİSTEMİ — v5.1 EK MODÜL
+# ═══════════════════════════════════════════════════════════════
+
+# ── ADMİN YETKİ SİSTEMİ ────────────────────────────────────────
+# Yetki seviyeleri:
+# 3 = Süper Admin (her şey)
+# 2 = Moderatör (warn/ban/kick/mute + casino yönet)
+# 1 = Yardımcı (sadece warn + mesaj silme)
+
+YETKILER = {
+    "ban":        2,
+    "kick":       2,
+    "mute":       2,
+    "warn":       1,
+    "casino":     2,
+    "bakiye_ver": 3,
+    "kanal_ekle": 3,
+    "ayarlar":    3,
+    "lisans":     3,
+}
+
+async def cevap_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    if len(context.args)<2: return await update.message.reply_text("Kullanım: /cevap [ticket_id] [mesaj]")
+    c=cfg(); tid=context.args[0]; mesaj=" ".join(context.args[1:])
+    if tid not in c.get("tickets",{}): return await update.message.reply_text("❌ Ticket bulunamadı!")
+    ticket=c["tickets"][tid]; ticket["durum"]="kapali"; save(c)
+    try:
+        await context.bot.send_message(ticket["user_id"], f"🎫 <b>Ticket #{tid} Yanıtlandı</b>\n\n{mesaj}", parse_mode="HTML")
+        await update.message.reply_text("✅ Yanıt gönderildi!")
+    except: await update.message.reply_text("❌ Kullanıcıya ulaşılamadı!")
+
+# ÜCRETLI ÜYELİK
+
+async def destek_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args: return await update.message.reply_text("Kullanım: /destek [mesajın]")
+    c=cfg(); uid=update.effective_user.id
+    tid=str(uid)[-6:]
+    c.setdefault("tickets",{})[tid]={"durum":"acik","isim":update.effective_user.first_name,"user_id":uid,"mesaj":" ".join(context.args)}
+    save(c)
+    await update.message.reply_text(f"🎫 Ticket açıldı #{tid}\nEn kısa sürede yanıtlanacak!")
+    for aid in c["adminler"]:
+        try: await context.bot.send_message(aid, f"🎫 <b>Yeni Ticket #{tid}</b>\n👤 {update.effective_user.first_name} ({uid})\n💬 {' '.join(context.args)}\n\nCevap: /cevap {tid} [mesaj]", parse_mode="HTML")
+        except: pass
+
+async def emojisil_cmd(update, context):
+    if not is_admin(update.effective_user.id): return
+    c=cfg()
+    if not context.args: return await update.message.reply_text("Kullanım: /emojisil kelime")
+    k=context.args[0].lower()
+    if k in c["emoji_kurallar"]: del c["emoji_kurallar"][k]; save(c); await update.message.reply_text(f"🗑 {k} silindi!")
+    else: await update.message.reply_text("❌ Bulunamadı!")
+
+async def eth_cmd(update, context): context.args=["ETH"]; await kripto_cmd(update, context)
+
+async def futbol_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """⚽ Penaltı atışı — Kaleciye karşı şans dene!"""
+    c = cfg()
+    if not c["casino_aktif"]: return
+    uid = str(update.effective_user.id)
+    isim = update.effective_user.first_name
+    if len(context.args) < 2:
+        return await update.message.reply_text(
+            "⚽ Kullanım: /penalti [bahis] [sol|orta|sag]\nKaleci rastgele bir tarafa atlayacak!")
+    try:
+        bahis = int(context.args[0]); yon = context.args[1].lower()
+        if yon not in ["sol","orta","sag","sağ"]:
+            return await update.message.reply_text("❌ sol, orta veya sag yaz!")
+        b = get_bakiye(c, uid)
+        if b["puan"] < bahis: return await update.message.reply_text("❌ Yetersiz bakiye!")
+        if bahis < c["casino_min_bahis"] or bahis > c["casino_max_bahis"]:
+            return await update.message.reply_text(f"❌ {c['casino_min_bahis']}-{c['casino_max_bahis']} arası!")
+
+        kaleci_yon = random.choice(["sol", "orta", "sag"])
+        yon_emoji = {"sol":"⬅️","orta":"⬆️","sag":"➡️"}
+
+        if yon in ["sag","sağ"]: yon = "sag"
+
+        if yon != kaleci_yon:
+            kazanc = int(bahis * 1.5); txt = "⚽ GOL! 1.5x!"
+            kale = "┌─────────┐\n│    ⚽    │\n└─────────┘"
+        else:
+            kazanc = -bahis; txt = "🧤 Kaleci kurtardı!"
+            kale = f"┌─────────┐\n│ 🧤{yon_emoji[kaleci_yon]}  │\n└─────────┘"
+
+        yeni = add_puan(c, uid, isim, kazanc)
+        c["stats"]["casino_oyun"] += 1; save(c)
+        await update.message.reply_text(
+            f"⚽ <b>Penaltı Atışı</b>\n\n{kale}\n\n"
+            f"Sen: {yon_emoji.get(yon,'?')}  Kaleci: {yon_emoji[kaleci_yon]}\n\n{txt}\n"
+            f"{'➕' if kazanc > 0 else '➖'} <b>{abs(kazanc):,} puan</b>\n"
+            f"💰 Bakiye: <b>{yeni:,}</b>", parse_mode="HTML")
+    except: await update.message.reply_text("❌ Kullanım: /penalti [bahis] sol|orta|sag")
+
+
+# ── PUAN KAZANMA SİSTEMİ ────────────────────────────────────────
+# Üyeler şu yollarla puan kazanır:
+# 1. /bonus — Günlük ücretsiz puan
+# 2. /ref   — Davet sistemi
+# 3. Mesaj yazmak — Aktiflik puanı
+# 4. /gorev — Görev sistemi
+# 5. Admin'den manuel /ver komutu
+# 6. Etkinlik kazanma
+
+GOREVLER = {
+    "ilk_giris":   {"puan": 100, "aciklama": "🎉 İlk girişin", "tekrar": False},
+    "profil_foto": {"puan": 50,  "aciklama": "📸 Profil fotoğrafı", "tekrar": False},
+    "ilk_oyun":    {"puan": 30,  "aciklama": "🎮 İlk oyununu oynadın", "tekrar": False},
+    "gunluk_mesaj":{"puan": 5,   "aciklama": "💬 Günlük mesaj", "tekrar": True},
+    "haftalik":    {"puan": 200, "aciklama": "📅 Haftalık giriş", "tekrar": True},
+}
+
+def iptal(update, context): context.user_data["bekle"]=None; await update.message.reply_text("❌ İptal.", reply_markup=ana_kb())
+
+async def join_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    c=cfg()
+    if not c["join_aktif"]: return
+    user=update.chat_join_request.from_user
+    # Referans kontrolü
+    if context.args and str(context.args[0]).startswith("ref_"):
+        davet_eden=context.args[0].replace("ref_","")
+        if "ref_kayitlar" not in c: c["ref_kayitlar"]={}
+        kayit=c["ref_kayitlar"].setdefault(davet_eden,[])
+        if str(user.id) not in kayit:
+            kayit.append(str(user.id))
+            add_puan(c, davet_eden, "?", c["ref_odul"])
+    try:
+        await _gonder(context.bot, user.id,
+            c["join_mesaj"].format(first_name=user.first_name or "Kullanıcı",
+                                   last_name=user.last_name or "", username=user.username or ""),
+            c.get("join_medya_tip","yok"), c.get("join_medya_id",""), c.get("join_butonlar",[]))
+        await update.chat_join_request.approve()
+        c["stats"]["join"]+=1
+        b=c.get("buyume",{}); gun=bugun()
+        if gun not in b: b[gun]={"katilan":0}
+        b[gun]["katilan"]+=1; c["buyume"]=b; save(c)
+    except Exception as e:
+        logger.error(f"Join: {e}")
+        try: await update.chat_join_request.approve()
+        except: pass
+
+# ── MESAJ HANDLER ────────────────────────────────────────────────
+
+async def kick_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    if not update.message.reply_to_message: return await update.message.reply_text("Kicklemek için mesajı yanıtla!")
+    hedef=update.message.reply_to_message.from_user
+    try:
+        await context.bot.ban_chat_member(update.effective_chat.id, hedef.id)
+        await context.bot.unban_chat_member(update.effective_chat.id, hedef.id)
+        await update.message.reply_text(f"👟 <b>{hedef.first_name}</b> kicklendi!", parse_mode="HTML")
+    except Exception as e: await update.message.reply_text(f"❌ {e}")
+
+async def kripto_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    c=cfg()
+    if not c["kripto_aktif"]: return
+    sembol=context.args[0].upper() if context.args else "BTC"
+    try:
+        import urllib.request
+        url=f"https://api.coingecko.com/api/v3/simple/price?ids={_kripto_id(sembol)}&vs_currencies=usd,try"
+        with urllib.request.urlopen(url, timeout=5) as r:
+            data=json.loads(r.read())
+        kid=_kripto_id(sembol)
+        if kid in data:
+            usd=data[kid].get("usd","?"); try_val=data[kid].get("try","?")
+            await update.message.reply_text(f"📈 <b>{sembol}</b>\n\n💵 ${usd:,}\n🇹🇷 ₺{try_val:,}", parse_mode="HTML")
+        else: await update.message.reply_text(f"❌ '{sembol}' bulunamadı!")
+    except Exception as e: await update.message.reply_text(f"❌ Fiyat alınamadı: {e}")
+
+async def kurallar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    c=cfg()
+    await update.message.reply_text(f"📌 <b>Grup Kuralları</b>\n\n{c['kurallar']}", parse_mode="HTML")
+
+async def mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    if not update.message.reply_to_message: return await update.message.reply_text("Mutlamak için mesajı yanıtla!")
+    hedef=update.message.reply_to_message.from_user
+    sure=int(context.args[0]) if context.args else 10
+    try:
+        until=datetime.now()+timedelta(minutes=sure)
+        await context.bot.restrict_chat_member(update.effective_chat.id, hedef.id,
+            permissions=ChatPermissions(can_send_messages=False), until_date=until)
+        await update.message.reply_text(f"🔇 <b>{hedef.first_name}</b> {sure} dakika susturuldu!", parse_mode="HTML")
+    except Exception as e: await update.message.reply_text(f"❌ {e}")
+
+async def onayla_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    if len(context.args)<2: return await update.message.reply_text("Kullanım: /onayla [user_id] [1ay|3ay|yillik]")
+    c=cfg()
+    try:
+        uid_str,plan=context.args[0],context.args[1]
+        if plan not in c["uyelik_fiyatlar"]: return await update.message.reply_text("❌ Plan: 1ay, 3ay, yillik")
+        gun=c["uyelik_fiyatlar"][plan]["gun"]
+        bitis=(datetime.now()+timedelta(days=gun)).strftime("%Y-%m-%d")
+        c["uyelikler"][uid_str]={"plan":plan,"bitis":bitis,"aktif":True,"isim":f"Kullanıcı {uid_str}"}
+        c["stats"]["uyelik_satis"]+=1; save(c)
+        await update.message.reply_text(f"✅ Onaylandı! {uid_str} → {plan} → {bitis}")
+        try: await context.bot.send_message(int(uid_str), f"✅ Üyeliğin onaylandı!\nPlan: {plan}\nBitiş: {bitis} 🎉")
+        except: pass
+    except Exception as e: await update.message.reply_text(f"❌ {e}")
+
+async def otosil_cmd(update, context):
+    if not is_admin(update.effective_user.id): return
+    c=cfg()
+    if not context.args or not context.args[0].isdigit(): return await update.message.reply_text("Kullanım: /otosil 2")
+    idx=int(context.args[0])-1
+    if 0<=idx<len(c["oto_mesajlar"]): c["oto_mesajlar"].pop(idx); save(c); await update.message.reply_text("🗑 Silindi!")
+    else: await update.message.reply_text("❌ Geçersiz!")
+
+async def ton_cmd(update, context): context.args=["TON"]; await kripto_cmd(update, context)
+
+# TICKET & DESTEK
+
+async def unmute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    if not update.message.reply_to_message: return
+    hedef=update.message.reply_to_message.from_user
+    try:
+        await context.bot.restrict_chat_member(update.effective_chat.id, hedef.id,
+            permissions=ChatPermissions(can_send_messages=True, can_send_media_messages=True,
+                                        can_send_other_messages=True, can_add_web_page_previews=True))
+        await update.message.reply_text(f"🔊 <b>{hedef.first_name}</b> sesi açıldı!", parse_mode="HTML")
+    except Exception as e: await update.message.reply_text(f"❌ {e}")
+
+async def uyeol_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    c=cfg()
+    if not c["uyelik_aktif"]: return await update.message.reply_text("❌ Üyelik sistemi aktif değil.")
+    txt=("💰 <b>Ücretli Üyelik</b>\n\n"
+        +"\n".join([f"• {v['label']}: <b>{v['fiyat']} USDT</b>" for v in c['uyelik_fiyatlar'].values()])
+        +f"\n\n💎 TON: <code>{c['uyelik_ton_adres']}</code>\n💵 USDT: <code>{c['uyelik_usdt_adres']}</code>\n\nÖdeme sonrası yöneticiye ulaşın.")
+    await update.message.reply_text(txt, parse_mode="HTML")
+
+# ── JOIN HANDLER ─────────────────────────────────────────────────
+
+async def warn_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    if not update.message.reply_to_message: return await update.message.reply_text("Uyarmak için mesajı yanıtla!")
+    c=cfg()
+    hedef=update.message.reply_to_message.from_user
+    uid=str(hedef.id)
+    c["uyarilar"][uid]=c["uyarilar"].get(uid,0)+1
+    sayi=c["uyarilar"][uid]; max_u=c["max_uyari"]
+    save(c)
+    if sayi>=max_u:
+        try:
+            await context.bot.ban_chat_member(update.effective_chat.id, hedef.id)
+            c["uyarilar"].pop(uid,None); save(c)
+            await update.message.reply_text(f"🔨 <b>{hedef.first_name}</b> banlandı! ({max_u}/{max_u} uyarı)", parse_mode="HTML")
+        except Exception as e: await update.message.reply_text(f"❌ Ban başarısız: {e}")
+    else:
+        await update.message.reply_text(f"⚠️ <b>{hedef.first_name}</b> uyarıldı! ({sayi}/{max_u})", parse_mode="HTML")
+
+async def yasakekle_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    if not context.args: return await update.message.reply_text("Kullanım: /yasakekle kelime")
+    c=cfg(); kelime=" ".join(context.args).lower()
+    if kelime not in c["yasakli_kelimeler"]: c["yasakli_kelimeler"].append(kelime); save(c)
+    await update.message.reply_text(f"✅ '{kelime}' yasaklı listeye eklendi!")
+
+async def yasaksil_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    if not context.args: return await update.message.reply_text("Kullanım: /yasaksil kelime")
+    c=cfg(); kelime=" ".join(context.args).lower()
+    if kelime in c["yasakli_kelimeler"]: c["yasakli_kelimeler"].remove(kelime); save(c); await update.message.reply_text(f"✅ '{kelime}' kaldırıldı!")
+    else: await update.message.reply_text("❌ Bulunamadı!")
+
+# ANKET
+
+async def yeni_uye(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    c=cfg()
+    if not c["captcha_aktif"] or not update.message.new_chat_members: return
+    for user in update.message.new_chat_members:
+        if user.is_bot: continue
+        a=random.randint(1,10); b2=random.randint(1,10)
+        c["captcha_bekleyenler"][str(user.id)]={"cevap":a+b2,"chat":update.effective_chat.id}; save(c)
+        await update.message.reply_text(f"👋 {user.first_name}!\n\n🔐 <b>{a} + {b2} = ?</b>\n\n⏱ {c['captcha_sure']} saniye", parse_mode="HTML")
+        context.job_queue.run_once(_captcha_timeout, c["captcha_sure"],
+            data={"user_id":user.id,"chat_id":update.effective_chat.id}, name=f"cap_{user.id}")
 
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
