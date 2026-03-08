@@ -9,7 +9,8 @@ from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Poll, BotCommand
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
-    MessageHandler, ChatJoinRequestHandler, ContextTypes, filters
+    MessageHandler, ChatJoinRequestHandler, ChatMemberHandler,
+    ContextTypes, filters
 )
 
 BOT_TOKEN = "8743351745:AAGgX51IjWqSxNC6HY8yLINyabZ_4Dfq_Ow"
@@ -3221,6 +3222,55 @@ async def mesaj_handler_v2(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "❌ Format hatalı!\n\nDoğru format:\n<code>kod|İsim|fiyat|açıklama</code>\nÖrn: <code>ozel_renk|🎨 Özel Renk|500|Açıklama</code>",
                     parse_mode="HTML")
 
+
+        elif bekle == "bakiye_ver":
+            try:
+                parcalar = metin_in.strip().split()
+                if len(parcalar) < 2:
+                    raise ValueError
+                hedef = parcalar[0].replace("@","")
+                miktar = int(parcalar[1])
+                sebep = " ".join(parcalar[2:]) if len(parcalar) > 2 else "Admin transferi"
+                # UID veya username ile bul
+                hedef_uid = None
+                for u_id, u_data in c.get("kullanicilar", {}).items():
+                    if str(u_data.get("username","")).lower() == hedef.lower() or u_id == hedef:
+                        hedef_uid = u_id; break
+                if not hedef_uid:
+                    try: hedef_uid = str(int(hedef))
+                    except: pass
+                if not hedef_uid:
+                    await auto_reply(update, "❌ Kullanıcı bulunamadı!")
+                else:
+                    hedef_isim = c.get("kullanicilar",{}).get(hedef_uid,{}).get("isim", hedef_uid)
+                    add_puan(c, hedef_uid, hedef_isim, miktar)
+                    save(c)
+                    context.user_data["bekle"] = None
+                    await update.message.reply_text(
+                        f"✅ {hedef_isim} kişisine {miktar:,} puan verildi!\nSebep: {sebep}",
+                        parse_mode="HTML"
+                    )
+            except (ValueError, IndexError):
+                await auto_reply(update, "❌ Format: @kullanici 500 sebep")
+
+        elif bekle == "uyelik_cuzdan":
+            # Ücretli üyelik ödeme cüzdan bilgisi
+            cuzdan_tip = context.user_data.get("cuzdan_tip", "ton")
+            c.setdefault("uyelik_ton_adres" if cuzdan_tip=="ton" else "uyelik_usdt_adres", metin_in)
+            if cuzdan_tip == "ton":
+                c["uyelik_ton_adres"] = metin_in.strip()
+            else:
+                c["uyelik_usdt_adres"] = metin_in.strip()
+            save(c)
+            context.user_data["bekle"] = None
+            await update.message.reply_text(
+                f"✅ {cuzdan_tip.upper()} cüzdan adresi kaydedildi!\n"
+                f"<code>{metin_in.strip()}</code>",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Üyelik Ayarları", callback_data="m_uyelik")
+                ]])
+            )
         elif bekle == "adm_ekle_id":
             # Yeni admin ekleme: ID alındı → seviye seç
             try:
@@ -7092,7 +7142,6 @@ def main():
     app.add_handler(CommandHandler("etkinlik",    etkinlik_cmd))
     # Futbol Tahmin
     app.add_handler(CommandHandler("maclar",      maclar_cmd))
-    app.add_handler(CommandHandler("tahmin",      tahmin_cmd))  # casino sayı tahmin
     app.add_handler(CommandHandler("ftahmin",     futbol_tahmin_cmd))  # futbol maç tahmini
     app.add_handler(CommandHandler("tahminlerim", tahminlerim_cmd))
     app.add_handler(CommandHandler("tahmin_top",  tahmin_top_cmd))
