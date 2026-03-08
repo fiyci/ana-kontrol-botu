@@ -2389,6 +2389,117 @@ async def profil_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML"
     )
 
+async def hbonus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    c = cfg()
+    if not c["bakiye_aktif"]: return
+    uid = str(update.effective_user.id)
+    isim = update.effective_user.first_name
+    hkey = datetime.now().strftime("%Y-W%W")
+    if c.get("haftalik_bonus_al", {}).get(uid, "") == hkey:
+        return await update.message.reply_text("Bu hafta haftalik bonusunu aldin. Pazartesi tekrar gel!")
+    haftalik = c.get("haftalik_bonus", 500)
+    yeni = add_puan(c, uid, isim, haftalik)
+    c.setdefault("haftalik_bonus_al", {})[uid] = hkey
+    gorev_tamamla(c, uid, isim, "haftalik_bonus")
+    save(c)
+    sev = hesapla_seviye(c, yeni)
+    await update.message.reply_text(
+        f"Haftalik Bonus!\n+{haftalik} puan kazandin!\n"
+        f"Seviye {sev} | {yeni:,} puan\n\n"
+        f"/bonus ile gunluk bonus da alabilirsin!"
+    )
+
+
+async def seviye_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    c = cfg()
+    esikler = c.get("seviye_esikleri", {})
+    uid = str(update.effective_user.id)
+    b = get_bakiye(c, uid)
+    sev = hesapla_seviye(c, b["puan"])
+    son_puan, son_sev = sonraki_seviye(c, b["puan"])
+    satirlar = []
+    for s, esik in sorted(esikler.items(), key=lambda x: int(x[0])):
+        isaret = ">>>" if int(s) == sev else "   "
+        rozet = ROZETLER.get(int(s), "")
+        satirlar.append(f"{isaret} {rozet} Seviye {s}: {int(esik):,} puan")
+    kalan_txt = f"\nSonraki: {son_puan - b['puan']:,} puan kaldi" if son_puan else "\nMAKSIMUM SEVIYE!"
+    await update.message.reply_text(
+        f"<b>Seviye Tablosu</b>\n\n"
+        f"Bakiyen: {b['puan']:,} | Seviye {sev}{kalan_txt}\n\n"
+        + "\n".join(satirlar),
+        parse_mode="HTML"
+    )
+
+
+async def yardim_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    c = cfg()
+    uid = update.effective_user.id
+    if is_admin(uid):
+        await update.message.reply_text(
+            "<b>Admin Komutlari</b>\n\n"
+            "/panel — Admin paneli\n"
+            "/ver [id] [miktar] — Puan ver\n"
+            "/al [id] [miktar] — Puan al\n"
+            "/carpan [sayi] — Puan carpani\n"
+            "/dm [mesaj] — Toplu DM\n"
+            "/duyuru [mesaj] — Duyuru at\n"
+            "/etkinlik cift_puan 2 — Cift puan\n"
+            "/dm_listesi — Kullanici listesi",
+            parse_mode="HTML"
+        )
+        return
+    cmin = c.get("casino_min_bahis", 10)
+    cmax = c.get("casino_max_bahis", 1000)
+    gunluk = c.get("gunluk_bonus", 100)
+    haftalik = c.get("haftalik_bonus", 500)
+    ref_odul = c.get("ref_odul", 10)
+    aktiflik = c.get("aktiflik_puan", 2)
+    await update.message.reply_text(
+        "<b>Komutlar Rehberi</b>\n\n"
+        "<b>Bakiye & Puan</b>\n"
+        f"/bakiye — Puanin ve seviyen\n"
+        f"/profil — Tam profilin\n"
+        f"/bonus — Gunluk +{gunluk} puan (seri ile artar)\n"
+        f"/hbonus — Haftalik +{haftalik} puan\n"
+        "/seviye — Seviye tablosu\n"
+        "/top — Liderlik tablosu\n"
+        "/transfer [miktar] — Puan gonder\n\n"
+        "<b>Gorev & Market</b>\n"
+        "/gorev — Gorev merkezi\n"
+        "/market — Puan marketi\n"
+        f"/ref — Davet linki (+{ref_odul} puan/kisi)\n\n"
+        "<b>Casino</b>\n"
+        f"Min: {cmin} | Maks: {cmax:,} puan\n"
+        "/zar /slot /rulet /balik /mines\n"
+        "/tahmin /kart /ya /tombala /savas\n"
+        "/bowling /dart /basketbol /penalti\n\n"
+        f"<b>Puan Kazan</b>\n"
+        f"• Mesaj: {aktiflik} puan/dk\n"
+        "• /bonus (gunluk seri)\n"
+        "• /hbonus (haftalik)\n"
+        "• /gorev (gorevler)\n"
+        "• Casino kazanci\n"
+        "• Arkadaslarini davet et\n\n"
+        "/kurallar | /destek [mesaj] | /btc /eth /ton",
+        parse_mode="HTML"
+    )
+
+
+async def carpan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    c = cfg()
+    if not context.args:
+        return await update.message.reply_text(
+            f"Puan Carpani: {c.get('puan_carpan', 1.0)}x\n\n"
+            "Kullanim: /carpan [sayi]\nOrnek: /carpan 2.0"
+        )
+    try:
+        p = float(context.args[0])
+        c["puan_carpan"] = p
+        save(c)
+        await update.message.reply_text(f"Puan carpani: {p}x olarak ayarlandi.")
+    except:
+        await update.message.reply_text("Gecersiz. Ornek: /carpan 2.0")
 
 
 def main():
