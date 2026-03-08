@@ -841,6 +841,9 @@ async def cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(rows)
         )
+    elif d == "hg_bonus_dm":
+        await q.answer("💰 Gruba git ve /bonus yaz!", show_alert=True)
+
     elif d.startswith("kanal_kef_ekle_"):
         cid = d.replace("kanal_kef_ekle_", "")
         c = _normalize_kanallar(c)
@@ -3389,6 +3392,31 @@ async def mesaj_handler_v2(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if handled:
             return
 
+    # ── Aktivite log (her mesajda)
+    _gun_m = bugun()
+    _al_m  = c.setdefault("aktivite_log", {}).setdefault(_gun_m, {})
+    _al_m["mesaj"] = _al_m.get("mesaj", 0) + 1
+    from datetime import datetime as _dtm2
+    _saat_m = str(_dtm2.now().hour)
+    c.setdefault("aktivite_saat", {})[_saat_m] = c.get("aktivite_saat",{}).get(_saat_m,0) + 1
+    _aktif_set = _al_m.setdefault("aktif_uye_set", [])
+    if uid_str not in _aktif_set: _aktif_set.append(uid_str)
+    _al_m["aktif_uye"] = len(_aktif_set)
+    # Grup savaşı puan katkısı
+    _gs_m = c.get("grup_savas", {})
+    if _gs_m.get("aktif"):
+        for _tk_m in ("takim1","takim2"):
+            if uid_str in _gs_m.get(_tk_m,{}).get("uyeler",[]):
+                _gs_m[_tk_m]["puan"] = _gs_m[_tk_m].get("puan",0) + 1
+                break
+    # Bulmaca aktifse 5 harfli metni tahmin olarak işle
+    if context.user_data.get("bulmaca_aktif") and update.message and update.message.text:
+        _bm_metin = update.message.text.upper().strip()
+        if len(_bm_metin) == 5 and _bm_metin.isalpha():
+            _islendi = await _bulmaca_tahmin_isle(update, context, c)
+            if _islendi:
+                save(c); return
+
     # ── Aktiflik puanı (dakikada 1 puan, spam önlemeli)
     c = cfg()
     if c.get("bakiye_aktif") and update.message.text and not is_admin(uid):
@@ -4971,6 +4999,27 @@ async def yeni_uye(update: Update, context: ContextTypes.DEFAULT_TYPE):
         c.setdefault("uyelikler", {}).setdefault(uid_str, {
             "aktif": True, "giris": bugun(), "isim": isim
         })
+        kaydet_kullanici(c, user)
+
+        # ── Hoş Geldin DM
+        asyncio.create_task(hos_geldin_dm(
+            context.bot, uid_str, isim,
+            update.effective_chat.title or "Grup"
+        ))
+        # ── Davet yarışması kaydı
+        for _dev_eden, _dev_edilenler in c.get("ref_kayitlar", {}).items():
+            if uid_str in _dev_edilenler:
+                _ay = bugun()[:7]
+                _dy = c.setdefault("davet_yaris", {}).setdefault(_ay, {})
+                _de = _dy.setdefault(_dev_eden, {"sayi": 0, "isim": ""})
+                _de["isim"] = c.get("kullanicilar", {}).get(_dev_eden, {}).get("isim", _dev_eden)
+                _de["sayi"] += 1
+                break
+        # ── Aktivite log
+        _gun_yu = bugun()
+        _al_yu  = c.setdefault("aktivite_log", {}).setdefault(_gun_yu, {})
+        _al_yu["yeni_uye"] = _al_yu.get("yeni_uye", 0) + 1
+        save(c)
 
 
 async def join_request_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -6957,6 +7006,605 @@ def _start_metin(c, sekme="genel"):
     return sekmeler.get(sekme, sekmeler["genel"])
 
 
+# ══════════════════════════════════════════════════════════════════════
+# 1. HOŞ GELDİN TÜNELİ — Yeni üyeye DM rehber + ilk bonus
+# ══════════════════════════════════════════════════════════════════════
+async def hos_geldin_dm(bot, uid_str, isim, chat_title):
+    """Yeni üyeye DM: rehber + 50 puan başlangıç bonusu"""
+    c = cfg()
+    # Daha önce gönderildi mi?
+    if uid_str in c.get("hosgeldin_gonderildi", {}):
+        return
+    try:
+        await bot.send_message(
+            int(uid_str),
+            f"👋 <b>Merhaba {isim}!</b>\n\n"
+            f"<b>{chat_title}</b> grubuna hoş geldin! 🎉\n\n"
+            f"🎁 <b>Başlangıç hediyesi:</b> <b>50 puan</b> hesabına eklendi!\n\n"
+            f"<b>📋 Ne yapabilirsin?</b>\n"
+            f"🎰 /magaza — Puan mağazası\n"
+            f"💰 /bonus — Günlük bonus al\n"
+            f"🏆 /top — Liderlik tablosu\n"
+            f"🎲 /slot /zar /rulet — Casino oyunları\n"
+            f"⚔️ /duello — 1v1 düello\n"
+            f"❓ /quiz — Bilgi yarışması\n"
+            f"📖 /rehber — Tam komut rehberi\n\n"
+            f"Aktif ol, puan kazan, mağazadan ödül al! 💪",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("📖 Komut Rehberi", callback_data="rehber_ana"),
+                InlineKeyboardButton("🎁 Bonus Al", callback_data="hg_bonus_dm")
+            ]])
+        )
+        # 50 puan ver + kaydet
+        add_puan(c, uid_str, isim, 50)
+        c.setdefault("hosgeldin_gonderildi", {})[uid_str] = bugun()
+        c.setdefault("stats", {})["hosgeldin"] = c["stats"].get("hosgeldin", 0) + 1
+        save(c)
+    except:
+        pass  # DM kapalıysa sessizce geç
+
+# ══════════════════════════════════════════════════════════════════════
+# 2. DAVET YARIŞMASI
+# ══════════════════════════════════════════════════════════════════════
+async def davet_yaris_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/davet_yaris — Davet yarışması sıralaması"""
+    c = cfg()
+    yaris = c.get("davet_yaris", {})
+    ay = bugun()[:7]  # YYYY-MM
+    
+    ay_data = yaris.get(ay, {})
+    if not ay_data:
+        return await update.message.reply_text(
+            f"🏆 <b>Davet Yarışması — {ay}</b>\n\n"
+            f"Henüz bu ay davet yok!\n"
+            f"Arkadaşlarını davet et, sıralamaya gir ve ödül kazan!\n\n"
+            f"📌 Davet linkin:\nt.me/{(await context.bot.get_me()).username}?start=ref_{update.effective_user.id}",
+            parse_mode="HTML"
+        )
+    
+    # Sırala
+    sirali = sorted(ay_data.items(), key=lambda x: x[1]["sayi"], reverse=True)[:10]
+    satirlar = []
+    madalyalar = ["🥇","🥈","🥉"] + ["4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
+    for i, (uid, data) in enumerate(sirali):
+        isim = data.get("isim", uid)
+        sayi = data["sayi"]
+        odl  = data.get("odul_verildi", False)
+        satirlar.append(f"{madalyalar[i]} <b>{isim}</b> — {sayi} davet {'✅' if odl else ''}")
+    
+    uid_str = str(update.effective_user.id)
+    kendi   = ay_data.get(uid_str, {}).get("sayi", 0)
+    
+    # Ödüller
+    oduller = c.get("davet_yaris_oduller", {"1": 2000, "2": 1000, "3": 500})
+    
+    await update.message.reply_text(
+        f"🏆 <b>Davet Yarışması — {ay}</b>\n\n"
+        + "\n".join(satirlar) +
+        f"\n\n{'━'*20}\n"
+        f"📊 Senin davetlerin: <b>{kendi}</b>\n\n"
+        f"🎁 <b>Aylık Ödüller:</b>\n"
+        f"🥇 1. → {oduller.get('1',2000):,} puan\n"
+        f"🥈 2. → {oduller.get('2',1000):,} puan\n"
+        f"🥉 3. → {oduller.get('3',500):,} puan",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("🔗 Davet Linkimi Al", callback_data="davet_link")
+        ]])
+    )
+
+async def davet_link_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    uid = q.from_user.id
+    bot_info = await context.bot.get_me()
+    link = f"https://t.me/{bot_info.username}?start=ref_{uid}"
+    await q.answer(f"🔗 Davet linkin:\n{link}", show_alert=True)
+
+# ══════════════════════════════════════════════════════════════════════
+# 3. TAŞ KAĞIT MAKAS
+# ══════════════════════════════════════════════════════════════════════
+async def tkm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/tkm [bahis] — Taş Kağıt Makas, bota veya üyeye karşı"""
+    c = cfg()
+    if not c.get("bakiye_aktif", True): return
+    uid   = str(update.effective_user.id)
+    isim  = update.effective_user.first_name
+    args  = context.args
+    
+    bahis = 0
+    if args:
+        try: bahis = max(0, int(args[0]))
+        except: pass
+    
+    b = get_bakiye(c, uid)
+    if bahis > 0 and b["puan"] < bahis:
+        return await update.message.reply_text(f"❌ Yetersiz puan! Bakiyen: {b['puan']:,}")
+    
+    # Bota karşı oyna
+    context.user_data["tkm_bahis"] = bahis
+    await update.message.reply_text(
+        f"✊✌️🖐 <b>Taş Kağıt Makas</b>\n\n"
+        f"{'💰 Bahis: ' + str(bahis) + ' puan' if bahis > 0 else '🆓 Bahissiz'}\n\n"
+        f"Seçimini yap:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("✊ Taş",   callback_data="tkm_tas"),
+            InlineKeyboardButton("✌️ Makas", callback_data="tkm_makas"),
+            InlineKeyboardButton("🖐 Kağıt", callback_data="tkm_kagit"),
+        ]])
+    )
+
+async def tkm_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query; await q.answer()
+    d = q.data.replace("tkm_", "")
+    if d not in ("tas","makas","kagit"): return
+    
+    c   = cfg()
+    uid = str(q.from_user.id)
+    isim= q.from_user.first_name
+    bahis = context.user_data.get("tkm_bahis", 0)
+    
+    import random as _rnd
+    secimler = ["tas","makas","kagit"]
+    emojiler = {"tas":"✊","makas":"✌️","kagit":"🖐"}
+    bot_secim = _rnd.choice(secimler)
+    
+    # Kazanma durumları
+    kazanir = {"tas":"makas","makas":"kagit","kagit":"tas"}
+    
+    if d == bot_secim:
+        sonuc = "berabere"; puan_degisim = 0
+        mesaj = "🤝 Berabere! Kimse kazanamadı."
+    elif kazanir[d] == bot_secim:
+        sonuc = "kazandi"
+        puan_degisim = bahis if bahis > 0 else 0
+        if bahis > 0:
+            add_puan(c, uid, isim, bahis)
+            save(c)
+        mesaj = f"🎉 <b>Kazandın!</b> +{bahis} puan" if bahis > 0 else "🎉 <b>Kazandın!</b>"
+    else:
+        sonuc = "kaybetti"
+        puan_degisim = -bahis if bahis > 0 else 0
+        if bahis > 0:
+            add_puan(c, uid, isim, -bahis)
+            save(c)
+        mesaj = f"😔 <b>Kaybettin!</b> -{bahis} puan" if bahis > 0 else "😔 <b>Kaybettin!</b>"
+    
+    b2 = get_bakiye(c, uid)
+    await q.edit_message_text(
+        f"✊✌️🖐 <b>Taş Kağıt Makas</b>\n\n"
+        f"Sen: {emojiler[d]} | Bot: {emojiler[bot_secim]}\n\n"
+        f"{mesaj}\n"
+        f"{'💰 Bakiye: ' + str(b2['puan']) + ' p' if bahis > 0 else ''}",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("🔄 Tekrar", callback_data=f"tkm_yeniden_{bahis}"),
+            InlineKeyboardButton("❌ Kapat",  callback_data="tkm_kapat")
+        ]])
+    )
+
+async def tkm_yeniden_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query; await q.answer()
+    if q.data == "tkm_kapat":
+        return await q.edit_message_text("✊✌️🖐 Taş Kağıt Makas kapatıldı.", reply_markup=None)
+    bahis = int(q.data.replace("tkm_yeniden_","") or "0")
+    context.user_data["tkm_bahis"] = bahis
+    await q.edit_message_text(
+        f"✊✌️🖐 <b>Taş Kağıt Makas</b>\n\n"
+        f"{'💰 Bahis: ' + str(bahis) + ' puan' if bahis > 0 else '🆓 Bahissiz'}\n\n"
+        f"Seçimini yap:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("✊ Taş",   callback_data="tkm_tas"),
+            InlineKeyboardButton("✌️ Makas", callback_data="tkm_makas"),
+            InlineKeyboardButton("🖐 Kağıt", callback_data="tkm_kagit"),
+        ]])
+    )
+
+# ══════════════════════════════════════════════════════════════════════
+# 4. GÜNLÜK BULMACA (Wordle tarzı — 5 harfli Türkçe kelime)
+# ══════════════════════════════════════════════════════════════════════
+BULMACA_KELIMELER = [
+    "ARABA","BEBEK","CADDE","DUMAN","ELMAS","FENER","GUNES","HABER","INSAN","JOKER",
+    "KALEM","LAMBA","MEYVE","NEHIR","ONLAR","PERDE","RADYO","SEKER","TAHTA","UZMAN",
+    "VAPUR","YAZAR","ZEMIN","ATLAS","BALIK","CANTA","DAIRE","EKRAN","FASIL","GENEL",
+    "HASIR","ILKAY","JETON","KONAK","LEVHA","MARKA","NISAN","OYNAK","PANEL","RESIM",
+    "SABAH","TABLO","UĞRAK","VOLTA","YILAN","ZAMAN","ASKER","BULUT","ÇANAK","DENIZ",
+]
+
+def _bulmaca_goster(kelime, tahminler):
+    """Wordle tarzı görsel — emojilerle"""
+    satirlar = []
+    for tahmin in tahminler:
+        satir = ""
+        for i, harf in enumerate(tahmin):
+            if harf == kelime[i]:
+                satir += "🟩"  # Doğru yer
+            elif harf in kelime:
+                satir += "🟨"  # Yanlış yer
+            else:
+                satir += "⬛"  # Yok
+        satirlar.append(f"{satir}  {tahmin}")
+    # Boş satırlar
+    kalan = 6 - len(tahminler)
+    satirlar += ["⬜⬜⬜⬜⬜"] * kalan
+    return "\n".join(satirlar)
+
+async def bulmaca_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/bulmaca — Günlük 5 harfli Türkçe kelime bul"""
+    c   = cfg()
+    uid = str(update.effective_user.id)
+    chat_id = str(update.effective_chat.id)
+    isim = update.effective_user.first_name
+    bugun_str = bugun()
+    
+    bulmacalar = c.setdefault("bulmacalar", {})
+    gun_data   = bulmacalar.setdefault(bugun_str, {})
+    
+    # Günün kelimesi — seed ile sabit
+    import hashlib
+    seed = int(hashlib.md5(bugun_str.encode()).hexdigest(), 16) % len(BULMACA_KELIMELER)
+    gunun_kelimesi = BULMACA_KELIMELER[seed]
+    gun_data["kelime"] = gunun_kelimesi
+    
+    kullanici_data = gun_data.setdefault("oyuncular", {}).setdefault(uid, {
+        "tahminler": [], "bitti": False, "isim": isim
+    })
+    
+    if kullanici_data["bitti"]:
+        kazandi = kullanici_data.get("kazandi", False)
+        tahminler = kullanici_data["tahminler"]
+        return await update.message.reply_text(
+            f"🔤 <b>Günlük Bulmaca</b>\n\n"
+            f"{_bulmaca_goster(gunun_kelimesi, tahminler)}\n\n"
+            f"{'✅ Bugün çözdün! Yarın tekrar gel.' if kazandi else f'❌ Bugün bitiş. Kelime: {gunun_kelimesi}'}",
+            parse_mode="HTML"
+        )
+    
+    tahminler = kullanici_data["tahminler"]
+    kalan = 6 - len(tahminler)
+    
+    if not tahminler:
+        context.user_data["bulmaca_aktif"] = True
+        mesaj = (
+            f"🔤 <b>Günlük Bulmaca</b>\n\n"
+            f"5 harfli Türkçe kelimeyi 6 tahminde bul!\n\n"
+            f"🟩 Doğru harf, doğru yer\n"
+            f"🟨 Doğru harf, yanlış yer\n"
+            f"⬛ Harf yok\n\n"
+            f"{_bulmaca_goster(gunun_kelimesi, tahminler)}\n\n"
+            f"5 harfli kelimeni yaz:"
+        )
+    else:
+        mesaj = (
+            f"🔤 <b>Günlük Bulmaca</b> ({kalan} hakkın kaldı)\n\n"
+            f"{_bulmaca_goster(gunun_kelimesi, tahminler)}\n\n"
+            f"5 harfli kelimeni yaz:"
+        )
+        context.user_data["bulmaca_aktif"] = True
+    
+    save(c)
+    await update.message.reply_text(mesaj, parse_mode="HTML")
+
+async def _bulmaca_tahmin_isle(update: Update, context: ContextTypes.DEFAULT_TYPE, c):
+    """Bulmaca tahminini işle — mesaj_handler_v2'den çağrılır"""
+    uid  = str(update.effective_user.id)
+    isim = update.effective_user.first_name
+    metin = update.message.text.upper().strip()
+    bugun_str = bugun()
+    
+    bulmacalar = c.setdefault("bulmacalar", {})
+    gun_data   = bulmacalar.get(bugun_str, {})
+    if not gun_data: return False
+    
+    gunun_kelimesi = gun_data.get("kelime", "")
+    oyuncular = gun_data.setdefault("oyuncular", {})
+    kd = oyuncular.setdefault(uid, {"tahminler":[], "bitti":False, "isim":isim})
+    
+    if kd["bitti"] or len(metin) != 5 or not metin.isalpha():
+        return False
+    
+    kd["tahminler"].append(metin)
+    kazandi = (metin == gunun_kelimesi)
+    bitti   = kazandi or len(kd["tahminler"]) >= 6
+    
+    if bitti:
+        kd["bitti"] = True
+        kd["kazandi"] = kazandi
+        context.user_data["bulmaca_aktif"] = False
+        if kazandi:
+            deneme = len(kd["tahminler"])
+            puan   = max(50, 300 - (deneme-1)*40)
+            add_puan(c, uid, isim, puan)
+            # İlk bilen?
+            if not gun_data.get("ilk_bilen"):
+                gun_data["ilk_bilen"] = uid
+                add_puan(c, uid, isim, 200)  # Bonus
+                puan += 200
+            mesaj = (
+                f"🎉 <b>Tebrikler {isim}!</b>\n\n"
+                f"{_bulmaca_goster(gunun_kelimesi, kd['tahminler'])}\n\n"
+                f"✅ Kelime: <b>{gunun_kelimesi}</b>\n"
+                f"🔢 {deneme}. tahminde buldun!\n"
+                f"💰 +{puan} puan kazandın!"
+            )
+        else:
+            mesaj = (
+                f"😔 <b>Hakkın bitti!</b>\n\n"
+                f"{_bulmaca_goster(gunun_kelimesi, kd['tahminler'])}\n\n"
+                f"❌ Kelime: <b>{gunun_kelimesi}</b> idi."
+            )
+        save(c)
+        await update.message.reply_text(mesaj, parse_mode="HTML")
+    else:
+        kalan = 6 - len(kd["tahminler"])
+        save(c)
+        await update.message.reply_text(
+            f"🔤 <b>Günlük Bulmaca</b> ({kalan} hakkın kaldı)\n\n"
+            f"{_bulmaca_goster(gunun_kelimesi, kd['tahminler'])}\n\n"
+            f"Devam et:",
+            parse_mode="HTML"
+        )
+    return True
+
+# ══════════════════════════════════════════════════════════════════════
+# 5. GRUP SAVAŞI
+# ══════════════════════════════════════════════════════════════════════
+async def savas_baslat_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/grup_savas — Admin iki takım arasında savaş başlatır"""
+    if not is_admin(update.effective_user.id): return
+    c = cfg()
+    
+    if c.get("grup_savas", {}).get("aktif"):
+        return await update.message.reply_text("⚠️ Zaten aktif bir savaş var! /savas_bitis ile bitir.")
+    
+    args = context.args
+    takim1 = args[0] if args else "🔴 Kırmızı"
+    takim2 = args[1] if len(args) > 1 else "🔵 Mavi"
+    sure   = int(args[2]) if len(args) > 2 else 24  # saat
+    
+    import time as _t
+    c["grup_savas"] = {
+        "aktif": True,
+        "takim1": {"isim": takim1, "puan": 0, "uyeler": []},
+        "takim2": {"isim": takim2, "puan": 0, "uyeler": []},
+        "bitis":  _t.time() + sure*3600,
+        "sure_saat": sure
+    }
+    save(c)
+    
+    await update.message.reply_text(
+        f"⚔️ <b>GRUP SAVAŞI BAŞLADI!</b>\n\n"
+        f"{'━'*24}\n"
+        f"{takim1} VS {takim2}\n"
+        f"{'━'*24}\n\n"
+        f"⏱ Süre: {sure} saat\n\n"
+        f"Hangi takımdasın? Aşağıdan seç!\n"
+        f"Her aktifliğin takımına puan katıyor!",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton(f"⚔️ {takim1}", callback_data="savas_katil_1"),
+            InlineKeyboardButton(f"⚔️ {takim2}", callback_data="savas_katil_2"),
+        ],[
+            InlineKeyboardButton("📊 Skor Tablosu", callback_data="savas_skor")
+        ]])
+    )
+
+async def savas_bitis_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/savas_bitis — Grup savaşını bitir ve ödülleri dağıt"""
+    if not is_admin(update.effective_user.id): return
+    c = cfg()
+    gs = c.get("grup_savas", {})
+    if not gs.get("aktif"):
+        return await update.message.reply_text("❌ Aktif savaş yok.")
+    
+    t1 = gs["takim1"]; t2 = gs["takim2"]
+    kazanan = t1 if t1["puan"] >= t2["puan"] else t2
+    kaybeden = t2 if kazanan == t1 else t1
+    
+    # Ödül dağıt
+    odul_kazanan = 300; odul_kaybeden = 50
+    for uid in kazanan.get("uyeler", []):
+        isim = c.get("kullanicilar",{}).get(uid,{}).get("isim", uid)
+        add_puan(c, uid, isim, odul_kazanan)
+    for uid in kaybeden.get("uyeler", []):
+        isim = c.get("kullanicilar",{}).get(uid,{}).get("isim", uid)
+        add_puan(c, uid, isim, odul_kaybeden)
+    
+    c["grup_savas"]["aktif"] = False
+    save(c)
+    
+    await update.message.reply_text(
+        f"⚔️ <b>SAVAŞ BİTTİ!</b>\n\n"
+        f"🏆 Kazanan: <b>{kazanan['isim']}</b> ({kazanan['puan']:,} p)\n"
+        f"😔 Kaybeden: <b>{kaybeden['isim']}</b> ({kaybeden['puan']:,} p)\n\n"
+        f"✅ Kazanan takım: +{odul_kazanan} puan/kişi\n"
+        f"🤝 Kaybeden takım: +{odul_kaybeden} puan/kişi\n\n"
+        f"Ödüller dağıtıldı!",
+        parse_mode="HTML"
+    )
+
+async def grup_savas_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query; await q.answer()
+    d = q.data; c = cfg()
+    uid = str(q.from_user.id)
+    isim = q.from_user.first_name
+    gs = c.get("grup_savas", {})
+    
+    if not gs.get("aktif"):
+        return await q.answer("❌ Aktif savaş yok!", show_alert=True)
+    
+    if d == "savas_skor":
+        t1 = gs["takim1"]; t2 = gs["takim2"]
+        await q.answer(
+            f"⚔️ Skor:\n{t1['isim']}: {t1['puan']:,} p ({len(t1['uyeler'])} kişi)\n"
+            f"{t2['isim']}: {t2['puan']:,} p ({len(t2['uyeler'])} kişi)",
+            show_alert=True
+        )
+    elif d in ("savas_katil_1", "savas_katil_2"):
+        takim_key = "takim1" if d == "savas_katil_1" else "takim2"
+        diger_key = "takim2" if takim_key == "takim1" else "takim1"
+        
+        # Zaten başka takımda mı?
+        if uid in gs.get(diger_key, {}).get("uyeler", []):
+            return await q.answer("❌ Zaten diğer takımdasın!", show_alert=True)
+        
+        takim = gs[takim_key]
+        if uid not in takim["uyeler"]:
+            takim["uyeler"].append(uid)
+            save(c)
+            await q.answer(f"✅ {takim['isim']} takımına katıldın!", show_alert=True)
+        else:
+            await q.answer("Zaten bu takımdasın!", show_alert=True)
+
+# ══════════════════════════════════════════════════════════════════════
+# 6. AKTİVİTE HARİTASI
+# ══════════════════════════════════════════════════════════════════════
+async def aktivite_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/aktivite — Grubun son 7 günlük aktivite haritası"""
+    c = cfg()
+    aktivite = c.get("aktivite_log", {})
+    
+    from datetime import datetime as _dt, timedelta as _td
+    bugundt = _dt.now()
+    
+    gunler = []
+    max_mesaj = 1
+    for i in range(6, -1, -1):
+        gun = (bugundt - _td(days=i)).strftime("%Y-%m-%d")
+        gun_data = aktivite.get(gun, {})
+        mesaj_sayisi = gun_data.get("mesaj", 0)
+        aktif_uye   = gun_data.get("aktif_uye", 0)
+        max_mesaj = max(max_mesaj, mesaj_sayisi)
+        gunler.append((gun, mesaj_sayisi, aktif_uye))
+    
+    # ASCII bar chart
+    satirlar = []
+    for gun, mesaj, aktif in gunler:
+        gun_kisa = gun[5:]  # MM-DD
+        bar_uzun = int((mesaj / max_mesaj) * 12) if max_mesaj > 0 else 0
+        bar = "█" * bar_uzun + "░" * (12 - bar_uzun)
+        satirlar.append(f"<code>{gun_kisa} {bar} {mesaj}</code>")
+    
+    # Saatlik dağılım
+    saat_data = c.get("aktivite_saat", {})
+    en_aktif_saat = max(saat_data.items(), key=lambda x: x[1], default=("?", 0))
+    
+    toplam_bugun = gunler[-1][1]
+    toplam_hafta = sum(g[1] for g in gunler)
+    
+    await dm_veya_grup(update, context,
+        f"📊 <b>Aktivite Haritası (7 gün)</b>\n\n"
+        f"{'━'*26}\n"
+        + "\n".join(satirlar) +
+        f"\n{'━'*26}\n"
+        f"📅 Bugün: <b>{toplam_bugun}</b> mesaj\n"
+        f"📆 Bu hafta: <b>{toplam_hafta}</b> mesaj\n"
+        f"⏰ En aktif saat: <b>{en_aktif_saat[0]}:00</b>\n\n"
+        f"💡 En aktif günlerde duyuru yap!",
+        parse_mode="HTML"
+    )
+
+# ══════════════════════════════════════════════════════════════════════
+# 7. HAFTALIK OTOMATİK RAPOR
+# ══════════════════════════════════════════════════════════════════════
+async def davet_yaris_odulu_job(context):
+    """Her ayın 1'inde önceki ayın davet yarışması ödüllerini dağıt"""
+    c = cfg()
+    from datetime import datetime as _dt, timedelta as _td
+    gecen_ay = (_dt.now().replace(day=1) - _td(days=1)).strftime("%Y-%m")
+    ay_data = c.get("davet_yaris", {}).get(gecen_ay, {})
+    if not ay_data:
+        return
+    
+    oduller = c.get("davet_yaris_oduller", {"1": 2000, "2": 1000, "3": 500})
+    sirali  = sorted(ay_data.items(), key=lambda x: x[1].get("sayi",0), reverse=True)
+    
+    for sira, (uid, data) in enumerate(sirali[:3], 1):
+        odl = oduller.get(str(sira), 0)
+        if odl > 0 and not data.get("odul_verildi"):
+            isim = data.get("isim", uid)
+            add_puan(c, uid, isim, odl)
+            data["odul_verildi"] = True
+            try:
+                await context.bot.send_message(
+                    int(uid),
+                    f"🏆 <b>Davet Yarışması Ödülü!</b>\n\n"
+                    f"{['🥇','🥈','🥉'][sira-1]} {gecen_ay} yarışmasında <b>{sira}. oldun!</b>\n"
+                    f"💰 <b>+{odl:,} puan</b> hesabına eklendi!",
+                    parse_mode="HTML"
+                )
+            except: pass
+    
+    save(c)
+    # Adminlere bildir
+    for aid in c.get("adminler", []):
+        try:
+            ozet = "\n".join([f"  {i+1}. {d.get('isim',u)}: {d.get('sayi',0)} davet"
+                               for i,(u,d) in enumerate(sirali[:3])])
+            await context.bot.send_message(
+                aid,
+                f"🏆 <b>Davet Yarışması Tamamlandı!</b> ({gecen_ay})\n\n{ozet}\n\nÖdüller dağıtıldı!",
+                parse_mode="HTML"
+            )
+        except: pass
+
+
+async def haftalik_rapor_job(context):
+    """Her pazartesi 09:00'da adminlere haftalık özet"""
+    c = cfg()
+    from datetime import datetime as _dt, timedelta as _td
+    
+    aktivite = c.get("aktivite_log", {})
+    now      = _dt.now()
+    
+    # Son 7 gün
+    toplam_mesaj = 0; toplam_yeni_uye = 0; en_aktif_gun = ("?", 0)
+    for i in range(7):
+        gun = (now - _td(days=i+1)).strftime("%Y-%m-%d")
+        gd  = aktivite.get(gun, {})
+        mesaj = gd.get("mesaj", 0)
+        toplam_mesaj += mesaj
+        toplam_yeni_uye += gd.get("yeni_uye", 0)
+        if mesaj > en_aktif_gun[1]:
+            en_aktif_gun = (gun[5:], mesaj)
+    
+    # Casino istatistikleri
+    stats = c.get("stats", {})
+    bakiyeler = c.get("bakiyeler", {})
+    toplam_kullanici = len(c.get("kullanicilar", {}))
+    aktif_bu_hafta = sum(1 for uid in c.get("kullanicilar",{}) 
+                         if c["kullanicilar"][uid].get("son_aktif","") >= (now-_td(days=7)).strftime("%Y-%m-%d"))
+    
+    # Top 3 kullanıcı
+    top3 = sorted(bakiyeler.items(), key=lambda x: x[1].get("puan",0), reverse=True)[:3]
+    top3_str = "\n".join([f"  {i+1}. {c.get('kullanicilar',{}).get(uid,{}).get('isim',uid)}: {data.get('puan',0):,} p"
+                           for i, (uid,data) in enumerate(top3)])
+    
+    rapor = (
+        f"📊 <b>Haftalık Rapor</b> ({(now-_td(days=7)).strftime('%d.%m')} – {now.strftime('%d.%m.%Y')})\n"
+        f"{'━'*28}\n\n"
+        f"👥 <b>Üyeler</b>\n"
+        f"  Toplam: {toplam_kullanici:,}\n"
+        f"  Bu hafta yeni: +{toplam_yeni_uye:,}\n"
+        f"  Aktif üye: {aktif_bu_hafta:,}\n\n"
+        f"💬 <b>Mesaj Aktivitesi</b>\n"
+        f"  Toplam mesaj: {toplam_mesaj:,}\n"
+        f"  En aktif gün: {en_aktif_gun[0]} ({en_aktif_gun[1]} mesaj)\n\n"
+        f"🏆 <b>Lider Tablosu</b>\n{top3_str}\n\n"
+        f"🎰 Casino oyun: {stats.get('casino_oyun',0):,}\n"
+        f"🛒 Market satış: {stats.get('uyelik_satis',0):,}\n"
+        f"{'━'*28}\n"
+        f"📅 Sonraki rapor: Pazartesi 09:00"
+    )
+    
+    for aid in c.get("adminler", []):
+        try:
+            await context.bot.send_message(aid, rapor, parse_mode="HTML")
+        except: pass
+
+
 async def bot_erisim_degisti(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Bot bir kanala/gruba eklenince veya çıkarılınca otomatik kaydet"""
     if not update.my_chat_member:
@@ -7194,6 +7842,12 @@ def main():
     app.add_handler(CommandHandler("uyeol",   uyeol_cmd))
     app.add_handler(CommandHandler("gorev",   gorev_cmd))
     app.add_handler(CommandHandler("magaza",     magaza_cmd))
+    app.add_handler(CommandHandler("bulmaca",    bulmaca_cmd))
+    app.add_handler(CommandHandler("tkm",        tkm_cmd))
+    app.add_handler(CommandHandler("davet_yaris",davet_yaris_cmd))
+    app.add_handler(CommandHandler("aktivite",   aktivite_cmd))
+    app.add_handler(CommandHandler("grup_savas", savas_baslat_cmd))
+    app.add_handler(CommandHandler("savas_bitis",savas_bitis_cmd))
     app.add_handler(CommandHandler("satin",   satin_cmd))
 
     # Casino — Temel
@@ -7230,7 +7884,11 @@ def main():
     app.add_handler(CallbackQueryHandler(jackpot_cb,    pattern="^jackpot_"))
     app.add_handler(CallbackQueryHandler(kbj_cb,        pattern="^kbj_"))
     app.add_handler(CallbackQueryHandler(mac_tahmin_cb, pattern="^mac_"))
-    app.add_handler(CallbackQueryHandler(magaza_cb,  pattern="^mgz_"))
+    app.add_handler(CallbackQueryHandler(magaza_cb,      pattern="^mgz_"))
+    app.add_handler(CallbackQueryHandler(tkm_cb,          pattern="^tkm_(tas|makas|kagit)$"))
+    app.add_handler(CallbackQueryHandler(tkm_yeniden_cb,  pattern="^tkm_(yeniden|kapat)"))
+    app.add_handler(CallbackQueryHandler(grup_savas_cb,   pattern="^savas_"))
+    app.add_handler(CallbackQueryHandler(davet_link_cb,   pattern="^davet_link$"))
     app.add_handler(CallbackQueryHandler(rehber_cb, pattern="^rehber_"))
     app.add_handler(CallbackQueryHandler(cb_v2))
     app.add_handler(ChatJoinRequestHandler(join_handler))
@@ -7269,6 +7927,12 @@ def main():
     async def post_init(app):
         await _startup_config_restore(app)
     app.post_init = post_init
+
+    # Haftalık rapor — pazartesi 09:00
+    app.job_queue.run_daily(haftalik_rapor_job, time=datetime(2000,1,1,9,0,0).time(),
+                            days=(0,))  # 0 = Pazartesi
+    app.job_queue.run_daily(davet_yaris_odulu_job, time=datetime(2000,1,1,10,0,0).time(),
+                            days=(0,1,2,3,4,5,6))  # Her gün çalışır, içinde ay 1 kontrolü var
 
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
