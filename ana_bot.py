@@ -787,7 +787,7 @@ async def bakiye_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         bar = "MAKSIMUM SEVIYE"
     bonus_alindi = c["gunluk_bonus_al"].get(uid,"") == bugun()
-    await update.message.reply_text(
+    await dm_veya_grup(update, context, 
         f"<b>Bakiye Kart{vip_tag}</b>\n\n"
         f"Seviye {sev} | {b['puan']:,} puan\n"
         f"{bar}\n\n"
@@ -867,7 +867,7 @@ async def top_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kendi = next((i+1 for i,(u,_) in enumerate(sirali) if u==uid),None)
     kendi_p = c["bakiyeler"].get(uid,{}).get("puan",0)
     alt = f"\nSenin siran: {kendi}. | {kendi_p:,} puan" if kendi and kendi>10 else ""
-    await update.message.reply_text(
+    await dm_veya_grup(update, context, 
         f"<b>Liderlik Tablosu</b>\n\n"
         + "\n".join(rows or ["Henuz kimse yok."]) + alt
         + f"\n\n{len(c['bakiyeler'])} kisi kayitli",
@@ -921,30 +921,35 @@ async def auto_reply(update: Update, metin: str, parse_mode="HTML", sure=10):
 
 
 async def dm_veya_grup(update: Update, context, metin: str,
-                       grup_ozet: str = None, parse_mode: str = "HTML"):
+                       grup_ozet: str = None, parse_mode: str = "HTML",
+                       reply_markup=None):
     """
-    Private: direkt mesaj
-    Grup: tam sonuç DM'e → gruba kısa özet → 4sn sonra sil
+    Private: direkt mesaj (reply_markup ile)
+    Grup: tam sonuç DM'e → gruba kısa özet → 8sn sonra sil
     """
     uid = update.effective_user.id
     chat_type = update.effective_chat.type
 
     if chat_type == "private":
-        await update.message.reply_text(metin, parse_mode=parse_mode)
+        await update.message.reply_text(metin, parse_mode=parse_mode, reply_markup=reply_markup)
         return
 
     # DM gönder
     dm_ok = False
     try:
-        await context.bot.send_message(uid, metin, parse_mode=parse_mode)
+        await context.bot.send_message(uid, metin, parse_mode=parse_mode, reply_markup=reply_markup)
         dm_ok = True
     except Exception as e:
-        logger.warning(f"DM gönderilemedi {uid}: {e}")
+        logger.warning(f"dm_veya_grup DM gönderilemedi uid={uid}: {e}")
 
-    ozet = grup_ozet or ("📩 Sonuç DM'ine gönderildi!" if dm_ok else metin[:150])
-    ozet_msg = await update.message.reply_text(ozet, parse_mode=parse_mode)
-    # Grup mesajını 4sn sonra sil
-    _asyncio.create_task(_auto_delete(ozet_msg, 10))
+    if dm_ok:
+        ozet = grup_ozet or "📩 Sonuç DM'ine gönderildi!"
+        ozet_msg = await update.message.reply_text(ozet, parse_mode=parse_mode)
+        await _auto_delete(ozet_msg, 8)
+    else:
+        # DM kapalı — gruba yaz, kısa süre sonra sil
+        msg = await update.message.reply_text(metin, parse_mode=parse_mode, reply_markup=reply_markup)
+        await _auto_delete(msg, 20)
 
 
 async def dm_anim_veya_grup(update: Update, context, anim_metin: str,
@@ -992,7 +997,7 @@ async def zar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     isim = update.effective_user.first_name
     if not context.args:
-        return await update.message.reply_text(
+        return await auto_reply(update, 
             f"🎲 <b>Zar Oyunu</b>\nKullanım: /zar [bahis]\nMin: {c['casino_min_bahis']} | Max: {c['casino_max_bahis']}",
             parse_mode="HTML")
     try:
@@ -1021,7 +1026,7 @@ async def tura_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     isim = update.effective_user.first_name
     if not context.args:
-        return await update.message.reply_text(
+        return await auto_reply(update, 
             "🪙 <b>Yazı Tura</b>\nKullanım: /tura [bahis] [yazı/tura]\nÖrnek: /tura 100 yazı",
             parse_mode="HTML")
     try:
@@ -1088,7 +1093,7 @@ async def rulet_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     isim = update.effective_user.first_name
     if not context.args or len(context.args) < 2:
-        return await update.message.reply_text(
+        return await auto_reply(update, 
             "🎡 <b>Rulet</b>\nKullanım: /rulet [bahis] [tahmin]\n\n"
             "Tahmin seçenekleri:\n"
             "• <b>kırmızı / siyah</b> — 2x\n"
@@ -1493,7 +1498,7 @@ async def mines_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     isim = update.effective_user.first_name
     if not context.args:
-        return await update.message.reply_text(
+        return await auto_reply(update, 
             "💣 <b>Mines</b>\nKullanım: /mines [bahis] [mayın_sayısı 1-20]\nÖrnek: /mines 100 5",
             parse_mode="HTML")
     try:
@@ -1587,7 +1592,7 @@ async def gorev_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if hafta_satirlar:
         metin += "<b>Haftalık Görevler</b>\n" + "\n".join(hafta_satirlar)
 
-    await update.message.reply_text(metin.strip(), parse_mode="HTML")
+    await dm_veya_grup(update, context, metin.strip(), parse_mode="HTML")
 
 
 async def ver_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1681,7 +1686,7 @@ async def market_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             durum = "✅ Sahip" if alindi else ("✓ Alınabilir" if b["puan"] >= u["fiyat"] else "🔒")
             satirlar.append(f"{durum} <b>{u['isim']}</b> — {u['fiyat']:,} p\n  ↳ {u.get('aciklama','')}\n  /satin {kid}")
 
-    await update.message.reply_text(
+    await dm_veya_grup(update, context, 
         f"<b>🛒 Puan Marketi</b>\n"
         f"{rozet_al(c, uid)} Bakiyen: <b>{b['puan']:,} puan</b>\n"
         "".join(satirlar),
@@ -1750,7 +1755,7 @@ async def dm_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         c = cfg()
         kullanici_sayisi = len(c.get("kullanicilar", {}))
         dm_ok = sum(1 for u in c.get("kullanicilar",{}).values() if u.get("dm_ok", True))
-        return await update.message.reply_text(
+        return await auto_reply(update, 
             f"<b>DM Sistemi</b>\n\n"
             f"Kayıtlı kullanıcı: {kullanici_sayisi}\n"
             f"DM alabilir: {dm_ok}\n\n"
@@ -1770,7 +1775,7 @@ async def dm_filtre_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin: /dm_filtre [filtre] [mesaj]"""
     if not is_admin(update.effective_user.id): return
     if not context.args or len(context.args) < 2:
-        return await update.message.reply_text(
+        return await auto_reply(update, 
             "Kullanım: /dm_filtre [filtre] [mesaj]\n\n"
             "Filtreler: vip | aktif | sev5 | sev7 | hepsi"
         )
@@ -1869,7 +1874,7 @@ async def duyuru_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin: /duyuru [mesaj] — Gruba ve tüm kullanıcılara DM"""
     if not is_admin(update.effective_user.id): return
     if not context.args:
-        return await update.message.reply_text(
+        return await auto_reply(update, 
             "Kullanım: /duyuru [mesaj]\n\n"
             "Bu komut:\n"
             "1. Mesajı gruba gönderir\n"
@@ -1946,7 +1951,7 @@ async def profil_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     bas_emojiler = " ".join([BASARIMLAR[ba]["emoji"] for ba in basarimlar if ba in BASARIMLAR]) or "—"
 
-    await update.message.reply_text(
+    await dm_veya_grup(update, context, 
         f"{rozet} <b>{update.effective_user.first_name}</b>{vip_tag}\n"
         f"Seviye {sev} → Sev{sev+1 if son_sev else sev}\n"
         f"{prog}\n\n"
@@ -1993,7 +1998,7 @@ async def seviye_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         rozet = ROZETLER.get(int(s), "")
         satirlar.append(f"{isaret} {rozet} Seviye {s}: {int(esik):,} puan")
     kalan_txt = f"\nSonraki: {son_puan - b['puan']:,} puan kaldi" if son_puan else "\nMAKSIMUM SEVIYE!"
-    await update.message.reply_text(
+    await dm_veya_grup(update, context, 
         f"<b>Seviye Tablosu</b>\n\n"
         f"Bakiyen: {b['puan']:,} | Seviye {sev}{kalan_txt}\n\n"
         + "\n".join(satirlar),
@@ -2222,31 +2227,94 @@ async def mesaj_handler_v2(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     bekle = context.user_data.get("bekle")
 
+    # ── Medya (fotoğraf/video/belge) state handler'ları ──
+    if bekle and is_admin(uid) and update.message:
+        # Fotoğraf
+        if update.message.photo and bekle in ("join_foto", "oto_foto"):
+            c = cfg()
+            foto = update.message.photo[-1]  # En yüksek çözünürlük
+            if bekle == "join_foto":
+                c["join_medya_tip"] = "foto"
+                c["join_medya_id"] = foto.file_id
+                save(c); context.user_data["bekle"] = None
+                await update.message.reply_text("✅ Karşılama fotoğrafı kaydedildi!")
+            elif bekle == "oto_foto":
+                c["oto_medya_tip"] = "foto"
+                c["oto_medya_id"] = foto.file_id
+                save(c); context.user_data["bekle"] = None
+                await update.message.reply_text("✅ Otomatik mesaj fotoğrafı kaydedildi!")
+            return
+
+        # Video
+        if update.message.video and bekle in ("join_video", "oto_video"):
+            c = cfg()
+            vid = update.message.video
+            if bekle == "join_video":
+                c["join_medya_tip"] = "video"
+                c["join_medya_id"] = vid.file_id
+                save(c); context.user_data["bekle"] = None
+                await update.message.reply_text("✅ Karşılama videosu kaydedildi!")
+            elif bekle == "oto_video":
+                c["oto_medya_tip"] = "video"
+                c["oto_medya_id"] = vid.file_id
+                save(c); context.user_data["bekle"] = None
+                await update.message.reply_text("✅ Otomatik mesaj videosu kaydedildi!")
+            return
+
+        # Belge/GIF
+        if update.message.document and bekle in ("join_foto", "oto_foto", "join_video", "oto_video"):
+            c = cfg()
+            doc = update.message.document
+            tip = "belge"
+            if bekle in ("join_foto", "join_video"):
+                c["join_medya_tip"] = tip
+                c["join_medya_id"] = doc.file_id
+                save(c); context.user_data["bekle"] = None
+                await update.message.reply_text("✅ Karşılama medyası kaydedildi!")
+            else:
+                c["oto_medya_tip"] = tip
+                c["oto_medya_id"] = doc.file_id
+                save(c); context.user_data["bekle"] = None
+                await update.message.reply_text("✅ Otomatik mesaj medyası kaydedildi!")
+            return
+
+        # Sponsor logo fotoğrafı
+        if update.message.photo and bekle == "sponsor_logo":
+            foto = update.message.photo[-1]
+            context.user_data.setdefault("sponsor_ekle", {})["logo"] = foto.file_id
+            context.user_data["bekle"] = None
+            await update.message.reply_text("✅ Sponsor logosu kaydedildi!")
+            return
+
+
     # ── Yeni admin ekleme (yetki sistemi)
     if bekle == "yadmin_ekle" and update.message.text and is_admin(uid):
         try:
-            parcalar = update.message.text.strip().split()
-            yeni_uid, sev = int(parcalar[0]), int(parcalar[1])
+            metin_y = update.message.text.strip()
+            parcalar = metin_y.split()
+            # Format: sadece ID veya "ID SEVİYE"
+            yeni_uid = int(parcalar[0].replace("@",""))
+            sev = int(parcalar[1]) if len(parcalar) > 1 else 2  # varsayılan seviye 2
             if sev not in [1, 2, 3]:
-                return await auto_reply(update, "❌ Seviye 1, 2 veya 3 olmalı!")
+                sev = 2
             c = cfg()
-            if yeni_uid not in c["adminler"]:
-                c["adminler"].append(yeni_uid)
-            if "adminler_seviye" not in c:
-                c["adminler_seviye"] = {}
-            c["adminler_seviye"][str(yeni_uid)] = sev
+            if yeni_uid not in c.get("adminler", []):
+                c.setdefault("adminler", []).append(yeni_uid)
+            c.setdefault("adminler_seviye", {})[str(yeni_uid)] = sev
             save(c)
             context.user_data["bekle"] = None
             SEV_ISIM = {3: "👑 Süper Admin", 2: "🛡 Moderatör", 1: "⭐ Yardımcı"}
             await update.message.reply_text(
                 f"✅ Admin eklendi!\n\n"
                 f"ID: <code>{yeni_uid}</code>\n"
-                f"Rol: <b>{SEV_ISIM[sev]}</b>",
-                parse_mode="HTML", reply_markup=ana_kb())
-        except (ValueError, IndexError):
-            await update.message.reply_text(
-                "❌ Hatalı format!\n\nDoğru: <code>123456789 2</code>",
-                parse_mode="HTML")
+                f"Rol: <b>{SEV_ISIM[sev]}</b>\n\n"
+                f"Seviye değiştirmek için: ID SEVİYE (1/2/3)",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("⚙️ Ayarlara Dön", callback_data="m_ayar")
+                ]]))
+        except (ValueError, IndexError) as e:
+            await auto_reply(update, f"❌ Geçersiz format! Sadece ID yaz\nÖrn: <code>123456789</code>")
         return
 
 
@@ -2304,7 +2372,13 @@ async def mesaj_handler_v2(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if new_uid not in c.get("adminler", []):
                     c.setdefault("adminler", []).append(new_uid)
                 save(c); context.user_data["bekle"] = None
-                await update.message.reply_text(f"✅ Admin eklendi: <code>{new_uid}</code>", parse_mode="HTML")
+                await update.message.reply_text(
+                    f"✅ Admin eklendi: <code>{new_uid}</code>\n\nPanele dönmek için: /start",
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("⚙️ Ayarlara Dön", callback_data="m_ayar")
+                    ]])
+                )
             except:
                 await auto_reply(update, "❌ Geçerli bir kullanıcı ID'si gir")
 
@@ -2380,10 +2454,18 @@ async def mesaj_handler_v2(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except:
                 await auto_reply(update, "❌ Sayısal değer gir! (örn: 1.5)")
 
-        elif bekle in ("join_foto", "join_video", "oto_foto", "oto_video", "uyelik_cuzdan", "join_buton", "bakiye_ver"):
-            # Bu state'ler özel medya/config gerektiriyor — sessizce temizle
-            context.user_data["bekle"] = None
-            handled = False  # normal akışa devam et
+        elif bekle in ("join_foto", "join_video", "oto_foto", "oto_video"):
+            # Medya bekleniyor ama text geldi — state KORUYARAK uyar
+            await auto_reply(update, "📸 Lütfen bir fotoğraf veya video gönder! (metin değil)")
+        elif bekle == "join_buton":
+            # Buton formatı: Metin|URL
+            if "|" not in metin_in:
+                await auto_reply(update, "❌ Format: <code>Buton Adı|https://link.com</code>", parse_mode="HTML")
+            else:
+                parts = metin_in.split("|", 1)
+                c.setdefault("join_butonlar", []).append([parts[0].strip(), parts[1].strip()])
+                save(c); context.user_data["bekle"] = None
+                await update.message.reply_text(f"✅ Buton eklendi: <b>{parts[0].strip()}</b>", parse_mode="HTML")
 
         else:
             handled = False
@@ -3012,7 +3094,7 @@ async def futbol_tahmin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     isim = update.effective_user.first_name
 
     if not context.args or len(context.args) < 2:
-        return await update.message.reply_text(
+        return await auto_reply(update, 
             "⚽ <b>Tahmin Yap</b>\n\n"
             "Kullanım:\n"
             "/tahmin [MAC_ID] 1  — Ev sahibi kazanır\n"
@@ -3277,7 +3359,7 @@ async def mac_bitir_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin: /mac_bitir [MAC_ID] [ev_gol-dep_gol] — Sonuç gir, puan dağıt"""
     if not is_admin(update.effective_user.id): return
     if not context.args or len(context.args) < 2:
-        return await update.message.reply_text(
+        return await auto_reply(update, 
             "Kullanım: /mac_bitir [MAC_ID] [skor]\n"
             "Örnek: /mac_bitir ABC123 2-1"
         )
@@ -3576,7 +3658,7 @@ async def futbol_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     isim = update.effective_user.first_name
     if len(context.args) < 2:
-        return await update.message.reply_text(
+        return await auto_reply(update, 
             "⚽ Kullanım: /penalti [bahis] [sol|orta|sag]\nKaleci rastgele bir tarafa atlayacak!")
     try:
         bahis = int(context.args[0]); yon = context.args[1].lower()
@@ -3991,7 +4073,7 @@ async def quiz_soru_ekle_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE)
     """Admin: /quiz_ekle [soru] | [cevap1,cevap2]"""
     if not is_admin(update.effective_user.id): return
     if not context.args:
-        return await update.message.reply_text(
+        return await auto_reply(update, 
             "Kullanım: /quiz_ekle Soru metni | cevap1,cevap2\n"
             "Örnek: /quiz_ekle Türkiye'nin başkenti? | Ankara,ankara")
     metin = " ".join(context.args)
@@ -4017,7 +4099,7 @@ async def duello_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not c.get("duello_aktif", True): return
     if not c.get("bakiye_aktif"): return
     if not context.args or len(context.args) < 2:
-        return await update.message.reply_text(
+        return await auto_reply(update, 
             "⚔️ <b>Düello</b>\n\nKullanım: /duello @kullanici [bahis]\n"
             "Örnek: /duello @ahmet 500\n\n"
             "Kazanan tüm bahisi alır! 🏆", parse_mode="HTML")
@@ -4250,7 +4332,7 @@ async def kbj_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     isim = update.effective_user.first_name
     if not context.args:
-        return await update.message.reply_text(
+        return await auto_reply(update, 
             "🃏 <b>Kasayla BlackJack</b>\n\nKullanım: /bj [bahis]\n"
             "Örnek: /bj 200\n\n"
             "Hedef: 21'i geçmeden kasadan yüksek puan al!\n"
@@ -4482,7 +4564,7 @@ async def cekilis_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin: /cekilis [ödül_puan] [kazanan_sayısı] — Çekiliş başlat"""
     if not is_admin(update.effective_user.id): return
     if not context.args:
-        return await update.message.reply_text(
+        return await auto_reply(update, 
             "🎁 <b>Çekiliş</b>\n\n"
             "Kullanım: /cekilis [ödül] [kazanan_sayısı]\n"
             "Örnek: /cekilis 1000 3\n\n"
@@ -4567,7 +4649,7 @@ async def vip_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     carpan = c.get("vip_carpan", 1.5)
     vip = is_vip(c, uid)
     if vip:
-        await update.message.reply_text(
+        await dm_veya_grup(update, context, 
             f"⭐ <b>VIP Üye</b>\n\n"
             f"Tebrikler {isim}! VIP statüsündesin.\n\n"
             f"🎯 Avantajlar:\n"
@@ -4580,7 +4662,7 @@ async def vip_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         kalan = max(0, esik - bakiye)
         bar_dolu = min(10, int((bakiye / esik) * 10))
         bar = "█" * bar_dolu + "░" * (10 - bar_dolu)
-        await update.message.reply_text(
+        await dm_veya_grup(update, context, 
             f"⭐ <b>VIP Sistemi</b>\n\n"
             f"VIP olmak için <b>{esik:,}</b> puana ihtiyacın var.\n\n"
             f"[{bar}] {int((bakiye/esik)*100)}%\n"
@@ -4789,7 +4871,7 @@ async def kazan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     add_puan(c, uid, isim, odul)
     save(c)
     kalan = 3 - sayi
-    await update.message.reply_text(
+    await dm_veya_grup(update, context, 
         f"🎁 <b>Mini Görev Tamamlandı!</b>\n\n"
         f"➕ <b>+{odul} puan</b> kazandın!\n"
         f"📍 Bugün kalan hak: {kalan}/3",
@@ -5190,7 +5272,19 @@ async def sponsor_mesaj_handler(update: Update, context: ContextTypes.DEFAULT_TY
     if not adim: return False
     if not is_admin(update.effective_user.id): return False
 
-    metin = update.message.text.strip()
+    # Fotoğraf geldiyse
+    if update.message.photo and adim == "logo":
+        foto = update.message.photo[-1]
+        context.user_data.setdefault("sponsor_ekle", {})["logo"] = foto.file_id
+        context.user_data["sponsor_adim"] = "bonus"
+        await update.message.reply_text(
+            "3/3 ✍️ Bonus yazısını gir (yoksa 'yok' yaz):\nÖrn: 500 TL Deneme Bonusu",
+            reply_markup=geri_kb("sponsor_panel")
+        )
+        return True
+
+    metin = update.message.text.strip() if update.message.text else ""
+    if not metin: return False
     c = cfg()
     sponsorlar = _get_sponsorlar(c)
 
@@ -5320,7 +5414,7 @@ async def sponsor_bonus_duyur_cmd(update: Update, context: ContextTypes.DEFAULT_
         return
     sid = context.args[0].lower()
     if sid not in sponsorlar:
-        return await update.message.reply_text(f"❌ '{sid}' bulunamadı!")
+        return await auto_reply(update, f"❌ '{sid}' bulunamadı!")
     context.user_data["sponsor_bonus_sid"] = sid
     context.user_data["sponsor_adim"] = "bonus_mesaj"
     await update.message.reply_text(
@@ -5483,7 +5577,7 @@ async def commands_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             butonlar.append([InlineKeyboardButton("👑 Admin Komutları", callback_data="cmds_admin_0")])
         kb = InlineKeyboardMarkup(butonlar)
 
-    await update.message.reply_text(metin, parse_mode="HTML", reply_markup=kb)
+    await dm_veya_grup(update, context, metin, parse_mode="HTML", reply_markup=kb)
 
 
 async def commands_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -5858,19 +5952,14 @@ def main():
     print("🚀 SOGTİLLA v5.3 başlatıldı!")
     # BotCommand autocomplete
     cmds = [
-        BotCommand("start","Ana panel"), BotCommand("commands","Tüm komutlar"),
-        BotCommand("sponsorlar","Sponsorlar"), BotCommand("bakiye","Bakiye"),
-        BotCommand("bonus","Günlük bonus"), BotCommand("hbonus","Haftalık bonus"),
-        BotCommand("gorev","Görevler"), BotCommand("top","Liderlik"),
-        BotCommand("profil","Profil"), BotCommand("zar","Zar at"),
-        BotCommand("slot","Slot"), BotCommand("bj","BlackJack"),
-        BotCommand("duello","Düello"), BotCommand("jackpot","Jackpot"),
-        BotCommand("maclar","Maçlar"), BotCommand("btc","Bitcoin"),
-        BotCommand("kripto","Kripto"), BotCommand("ping","Ping"),
-        BotCommand("istat","İstatistik"), BotCommand("rehber","Rehber"),
-        BotCommand("transfer","Transfer"), BotCommand("vip","VIP"),
-        BotCommand("ref","Referans"), BotCommand("kazan","Kazan"),
-        BotCommand("kurallar","Kurallar"), BotCommand("destek","Destek"),
+        BotCommand("start",    "🏠 Ana panel"),
+        BotCommand("puan",     "💰 Bakiyeni gör"),
+        BotCommand("bonus",    "🎁 Günlük bonus"),
+        BotCommand("commands", "📋 Tüm komutlar"),
+        BotCommand("zar",      "🎲 Zar at"),
+        BotCommand("slot",     "🎰 Slot oyna"),
+        BotCommand("top",      "🏆 Liderlik"),
+        BotCommand("iptal",    "❌ İptal"),
     ]
     try:
         import asyncio as _aio2
