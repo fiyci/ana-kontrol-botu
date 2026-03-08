@@ -408,6 +408,7 @@ def ana_kb(c=None, sayfa=1):
              InlineKeyboardButton("🎁 Çekiliş Başlat",         callback_data="ap_cekilis")],
             [InlineKeyboardButton("🏆 Jackpot Havuzu",         callback_data="ap_jackpot"),
              InlineKeyboardButton("🎖 Puan Ekle/Sil",          callback_data="ap_puan_yonet")],
+            [InlineKeyboardButton("🛒 Market Ödülleri",          callback_data="ap_market_yonet")],
             [InlineKeyboardButton("━━━━━━━━━━━━━━━━━━━━", callback_data="ap_baslik")],
             [InlineKeyboardButton("« 1️⃣ Bot",      callback_data="ap_s1"),
              InlineKeyboardButton("3️⃣ Topluluk »", callback_data="ap_s3"),
@@ -614,6 +615,112 @@ async def cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 InlineKeyboardButton("🔙 Ekonomi", callback_data="ap_s2")
             ]]))
 
+    elif d == "ap_market_yonet":
+        # Market ürünleri yönetim paneli
+        urunler_db = c.get("market_urunler_ekstra", {})
+        # Hem sabit MARKET_URUNLER hem de admin eklediklerini göster
+        tum_urunler = {**MARKET_URUNLER, **urunler_db}
+        satirlar = []
+        for kid, u in list(tum_urunler.items())[:8]:  # Max 8 göster
+            kaynak = "⚙️" if kid in MARKET_URUNLER else "👤"
+            satirlar.append([InlineKeyboardButton(
+                f"{kaynak} {u['isim']} — {u['fiyat']:,}p",
+                callback_data=f"mkt_detay_{kid}"
+            )])
+        satirlar.append([InlineKeyboardButton("➕ Yeni Ödül Ekle", callback_data="mkt_yeni")])
+        satirlar.append([InlineKeyboardButton("🔙 Ekonomi", callback_data="ap_s2")])
+        await q.edit_message_text(
+            f"🛒 <b>Market Ödül Yönetimi</b>\n\n"
+            f"⚙️ = Sistem ödülü  👤 = Admin ekledi\n"
+            f"Toplam: {len(tum_urunler)} ürün",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(satirlar)
+        )
+
+    elif d.startswith("mkt_detay_"):
+        kid = d.replace("mkt_detay_", "")
+        urunler_db = c.get("market_urunler_ekstra", {})
+        tum = {**MARKET_URUNLER, **urunler_db}
+        if kid not in tum:
+            return await q.answer("❌ Ürün bulunamadı", show_alert=True)
+        u = tum[kid]
+        is_custom = kid in urunler_db
+        satirlar = []
+        if is_custom:
+            satirlar.append([
+                InlineKeyboardButton("✏️ Fiyat Değiştir", callback_data=f"mkt_fiyat_{kid}"),
+                InlineKeyboardButton("❌ Sil", callback_data=f"mkt_sil_{kid}")
+            ])
+        else:
+            satirlar.append([InlineKeyboardButton("✏️ Fiyatı Override Et", callback_data=f"mkt_fiyat_{kid}")])
+        satirlar.append([InlineKeyboardButton("🔙 Geri", callback_data="ap_market_yonet")])
+        await q.edit_message_text(
+            f"🛒 <b>{u['isim']}</b>\n\n"
+            f"💰 Fiyat: <b>{u['fiyat']:,} puan</b>\n"
+            f"📋 {u.get('aciklama', '—')}\n"
+            f"🏷 Kategori: {u.get('kategori', '—')}",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(satirlar)
+        )
+
+    elif d.startswith("mkt_fiyat_"):
+        kid = d.replace("mkt_fiyat_", "")
+        context.user_data["bekle"] = f"mkt_fiyat_gir_{kid}"
+        await q.edit_message_text(
+            f"✏️ <b>Yeni fiyat gir</b>\n\nÜrün: <code>{kid}</code>\n\nSadece sayı yaz (puan cinsinden):\n<i>İptal: /iptal</i>",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Vazgeç", callback_data="ap_market_yonet")]])
+        )
+
+    elif d.startswith("mkt_sil_"):
+        kid = d.replace("mkt_sil_", "")
+        urunler_db = c.setdefault("market_urunler_ekstra", {})
+        if kid in urunler_db:
+            del urunler_db[kid]
+            save(c)
+            await q.answer("✅ Ürün silindi!", show_alert=True)
+        await q.edit_message_text("Yükleniyor...", reply_markup=None)
+        # Market paneline geri dön
+        tum2 = {**MARKET_URUNLER, **urunler_db}
+        rows2 = [[InlineKeyboardButton(f"{'⚙️' if k in MARKET_URUNLER else '👤'} {v['isim']} — {v['fiyat']:,}p", callback_data=f"mkt_detay_{k}")] for k,v in list(tum2.items())[:8]]
+        rows2 += [[InlineKeyboardButton("➕ Yeni Ödül Ekle", callback_data="mkt_yeni")],[InlineKeyboardButton("🔙 Ekonomi", callback_data="ap_s2")]]
+        await q.edit_message_text(f"🛒 <b>Market Ödül Yönetimi</b>\n\nToplam: {len(tum2)} ürün", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(rows2))
+
+    elif d == "mkt_yeni":
+        context.user_data["bekle"] = "mkt_yeni_gir"
+        await q.edit_message_text(
+            "➕ <b>Yeni Market Ödülü Ekle</b>\n\n"
+            "Şu formatı yaz:\n"
+            "<code>kod|İsim|fiyat|açıklama</code>\n\n"
+            "Örnek:\n"
+            "<code>ozel_renk|🎨 Özel Renk|500|Profilde özel renk</code>\n\n"
+            "<i>İptal: /iptal</i>",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Vazgeç", callback_data="ap_market_yonet")]])
+        )
+
+
+    elif d.startswith("mkt_aktive_"):
+        parts = d.split("_")
+        hedef_uid = parts[2]; hedef_kid = "_".join(parts[3:])
+        await q.edit_message_text(
+            q.message.text + "\n\n✅ <b>Onaylandı!</b>",
+            parse_mode="HTML", reply_markup=None
+        )
+        # Kullanıcıya bildir
+        try:
+            _ekstra2 = cfg().get("market_urunler_ekstra", {})
+            _tum2 = {**MARKET_URUNLER, **_ekstra2}
+            u2 = _tum2.get(hedef_kid, {})
+            await context.bot.send_message(
+                int(hedef_uid),
+                f"✅ <b>{u2.get('isim', hedef_kid)}</b> ödülün aktive edildi!\n"
+                f"Admin tarafından onaylandı 🎉",
+                parse_mode="HTML"
+            )
+        except: pass
+
+
     elif d == "ap_jackpot":
         havuz = c.get("jackpot_havuz", 0)
         aktif = "🟢 Aktif" if c.get("jackpot_aktif") else "🔴 Pasif"
@@ -700,10 +807,69 @@ async def cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # KANAL
     elif d == "m_kanal":
-        rows = [[InlineKeyboardButton(f"❌ {k['isim']}", callback_data=f"kanal_sil_{i}")] for i, k in enumerate(c["kanallar"])]
-        rows += [[InlineKeyboardButton("➕ Ekle", callback_data="kanal_ekle")],[InlineKeyboardButton("🔙 Geri", callback_data="ana")]]
-        liste = "\n".join([f"• {k['isim']} (<code>{k['id']}</code>)" for k in c["kanallar"]]) or "Kanal yok."
-        await q.edit_message_text(f"📢 <b>Kanallar</b>\n\n{liste}", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(rows))
+        c = _normalize_kanallar(c)
+        kanallar = c.get("kanallar", [])
+        # Kayıtlı kanallar listesi
+        if kanallar:
+            liste = "\n".join([f"• <b>{k['isim']}</b> <code>{k['id']}</code>" for k in kanallar])
+        else:
+            liste = "📭 Henüz kanal/grup eklenmedi."
+        # Bot'un otomatik keşfettiği kanallar
+        kef = c.get("kesfedilen_kanallar", {})
+        rows = []
+        for i, k in enumerate(kanallar):
+            rows.append([InlineKeyboardButton(f"❌ {k['isim']}", callback_data=f"kanal_sil_{i}")])
+        # Keşfedilen ama eklenmemiş kanallar
+        mevcut_ids = {k["id"] for k in kanallar}
+        kef_satirlar = []
+        for cid, cinfo in kef.items():
+            if cid not in mevcut_ids:
+                kef_satirlar.append([InlineKeyboardButton(
+                    f"➕ {cinfo.get('isim', cid)}", callback_data=f"kanal_kef_ekle_{cid}"
+                )])
+        if kef_satirlar:
+            rows += kef_satirlar
+            liste += f"\n\n🔍 <b>Bot'un bulunduğu yerler ({len(kef_satirlar)}):</b>\nButona bas → anında ekle"
+        rows += [
+            [InlineKeyboardButton("✏️ ID ile Elle Ekle", callback_data="kanal_ekle")],
+            [InlineKeyboardButton("🔙 Geri", callback_data="ana")]
+        ]
+        await q.edit_message_text(
+            f"📢 <b>Kanal & Grup Yönetimi</b>\n\n{liste}\n\n"
+            f"💡 Botu bir kanala/gruba admin yap → otomatik listede görünür",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(rows)
+        )
+    elif d.startswith("kanal_kef_ekle_"):
+        cid = d.replace("kanal_kef_ekle_", "")
+        c = _normalize_kanallar(c)
+        kef = c.get("kesfedilen_kanallar", {})
+        if cid in kef:
+            isim = kef[cid].get("isim", cid)
+            kanallar = c.setdefault("kanallar", [])
+            ids = [k["id"] for k in kanallar]
+            if cid not in ids:
+                kanallar.append({"id": cid, "isim": isim})
+                save(c)
+                await q.answer(f"✅ {isim} eklendi!", show_alert=True)
+            else:
+                await q.answer("Zaten listede!", show_alert=True)
+        # m_kanal'a geri dön
+        await q.edit_message_text("Yükleniyor...", reply_markup=None)
+        import copy as _cp; fake_update = update
+        c2 = cfg(); c2 = _normalize_kanallar(c2)
+        kanallar2 = c2.get("kanallar", [])
+        kef2 = c2.get("kesfedilen_kanallar", {})
+        mevcut_ids2 = {k["id"] for k in kanallar2}
+        rows2 = [[InlineKeyboardButton(f"❌ {k['isim']}", callback_data=f"kanal_sil_{i}")] for i, k in enumerate(kanallar2)]
+        for cid2, ci2 in kef2.items():
+            if cid2 not in mevcut_ids2:
+                rows2.append([InlineKeyboardButton(f"➕ {ci2.get('isim',cid2)}", callback_data=f"kanal_kef_ekle_{cid2}")])
+        rows2 += [[InlineKeyboardButton("✏️ ID ile Elle Ekle", callback_data="kanal_ekle")],[InlineKeyboardButton("🔙 Geri", callback_data="ana")]]
+        liste2 = "\n".join([f"• <b>{k['isim']}</b> <code>{k['id']}</code>" for k in kanallar2]) or "Kanal yok."
+        await q.edit_message_text(f"📢 <b>Kanal & Grup Yönetimi</b>\n\n{liste2}", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(rows2))
+
+
     elif d == "kanal_ekle":
         await q.edit_message_text("Format: <code>-1001234|Kanal Adı</code>\n\nİptal: /iptal", parse_mode="HTML", reply_markup=geri_kb("m_kanal"))
         context.user_data["bekle"] = "kanal_ekle"
@@ -1286,7 +1452,7 @@ async def bakiye_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Giris serisi: {streak} gun\n"
         f"Davet: {ref_n} kisi\n"
         f"Gunluk bonus: {'Alindi' if bonus_alindi else f'/bonus -> +{c[chr(34)+chr(103)+chr(117)+chr(110)+chr(108)+chr(117)+chr(107)+chr(95)+chr(98)+chr(111)+chr(110)+chr(117)+chr(115)+chr(34)]} puan'}\n\n"
-        f"/gorev /market /top /hbonus /seviye",
+        f"/gorev /magaza /top /hbonus /seviye",
         parse_mode="HTML")
 
 async def bonus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2157,43 +2323,101 @@ MARKET_URUNLER = {
     "warn_sil":     {"isim": "🧹 Uyarı Sil (1 adet)","fiyat": 1500, "kategori": "koruma",  "aciklama": "1 warn silinir"},
 }
 
-async def market_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    c = cfg()
-    if not c["bakiye_aktif"]: return
-    uid = str(update.effective_user.id)
-    b = get_bakiye(c, uid)
-    sev = hesapla_seviye(c, b["puan"])
 
-    kategoriler = {}
-    for kid, u in MARKET_URUNLER.items():
-        kat = u.get("kategori", "diger")
-        kategoriler.setdefault(kat, []).append((kid, u))
+# ── MAĞAZA YARDIMCI ─────────────────────────────────────────────
+KAT_EMOJI  = {"rozet":"🏆","unvan":"🏷","ayricalik":"⚡","koruma":"🛡","diger":"🎁"}
+KAT_ISIM   = {"rozet":"Rozetler","unvan":"Ünvanlar","ayricalik":"Ayrıcalıklar","koruma":"Korumalar","diger":"Diğer"}
 
-    kat_emojileri = {"rozet":"🏆","unvan":"🏷","ayricalik":"⚡","koruma":"🛡","diger":"🎁"}
-    satirlar = []
-    for kat, urunler in kategoriler.items():
-        satirlar.append(f"\n<b>{kat_emojileri.get(kat,'🎁')} {kat.title()}</b>")
-        for kid, u in urunler:
-            alindi = kid in c.get("satin_alinan", {}).get(uid, [])
-            durum = "✅ Sahip" if alindi else ("✓ Alınabilir" if b["puan"] >= u["fiyat"] else "🔒")
-            satirlar.append(f"{durum} <b>{u['isim']}</b> — {u['fiyat']:,} p\n  ↳ {u.get('aciklama','')}\n  /satin {kid}")
+def _magaza_kb(c, uid, kat="rozet"):
+    """Mağaza inline klavyesi — kategori sekmeli"""
+    _ekstra = c.get("market_urunler_ekstra", {})
+    tum     = {**MARKET_URUNLER, **_ekstra}
+    b       = get_bakiye(c, uid)
+    satin_alinan = c.get("satin_alinan", {}).get(uid, [])
 
-    await dm_veya_grup(update, context, 
-        f"<b>🛒 Puan Marketi</b>\n"
-        f"{rozet_al(c, uid)} Bakiyen: <b>{b['puan']:,} puan</b>\n"
-        "".join(satirlar),
-        parse_mode="HTML"
+    # Kategori sekme butonları
+    kategoriler = sorted(set(u.get("kategori","diger") for u in tum.values()))
+    sekme_row = []
+    for k in kategoriler:
+        aktif = "▶ " if k == kat else ""
+        sekme_row.append(InlineKeyboardButton(
+            f"{aktif}{KAT_EMOJI.get(k,'🎁')}", callback_data=f"mgz_kat_{k}"
+        ))
+
+    # Seçili kategorinin ürünleri
+    urun_rows = []
+    for kid, u in tum.items():
+        if u.get("kategori","diger") != kat:
+            continue
+        alindi   = kid in satin_alinan
+        afford   = b["puan"] >= u["fiyat"]
+        if alindi:
+            simge = "✅"
+        elif afford:
+            simge = "🛒"
+        else:
+            simge = "🔒"
+        urun_rows.append([InlineKeyboardButton(
+            f"{simge} {u['isim']}  ·  {u['fiyat']:,} p",
+            callback_data=f"mgz_urun_{kid}"
+        )])
+
+    if not urun_rows:
+        urun_rows.append([InlineKeyboardButton("📭 Bu kategoride ürün yok", callback_data="mgz_bos")])
+
+    return InlineKeyboardMarkup([sekme_row] + urun_rows + [
+        [InlineKeyboardButton("📦 Satın Aldıklarım", callback_data="mgz_sahip"),
+         InlineKeyboardButton("❌ Kapat",             callback_data="mgz_kapat")]
+    ])
+
+def _magaza_metin(c, uid, kat="rozet"):
+    """Mağaza başlık metni"""
+    b    = get_bakiye(c, uid)
+    sev  = hesapla_seviye(c, b["puan"])
+    rozet= ROZETLER.get(sev, "🌱")
+    _ekstra = c.get("market_urunler_ekstra", {})
+    tum     = {**MARKET_URUNLER, **_ekstra}
+    kat_urun= sum(1 for u in tum.values() if u.get("kategori","diger") == kat)
+    kat_isim= KAT_ISIM.get(kat, kat.title())
+    return (
+        f"🏪 <b>Puan Mağazası</b>\n"
+        f"{'━'*22}\n"
+        f"{rozet} Seviye {sev}  |  💰 <b>{b['puan']:,} puan</b>\n\n"
+        f"<b>{KAT_EMOJI.get(kat,'🎁')} {kat_isim}</b> ({kat_urun} ürün)\n"
+        f"Bir ürüne tıkla → detay ve satın al"
     )
+
+async def magaza_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/magaza — Görsel puan mağazası (inline butonlu)"""
+    c   = cfg()
+    if not c.get("bakiye_aktif", True):
+        return await update.message.reply_text("❌ Bakiye sistemi kapalı.")
+    uid = str(update.effective_user.id)
+    # Başlangıç kategorisi — rozet yoksa ilk kategori
+    _ekstra = c.get("market_urunler_ekstra", {})
+    tum     = {**MARKET_URUNLER, **_ekstra}
+    kategoriler = sorted(set(u.get("kategori","diger") for u in tum.values()))
+    ilk_kat = "rozet" if "rozet" in kategoriler else (kategoriler[0] if kategoriler else "diger")
+    await update.message.reply_text(
+        _magaza_metin(c, uid, ilk_kat),
+        parse_mode="HTML",
+        reply_markup=_magaza_kb(c, uid, ilk_kat)
+    )
+
+
 
 
 async def satin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     c = cfg()
     if not context.args:
-        return await auto_reply(update, "Kullanım: /satin [urun_kodu]\n/market ile listeye bak")
+        return await auto_reply(update, "Kullanım: /satin [urun_kodu]\n/magaza ile listeye bak")
     kid = context.args[0]
-    if kid not in MARKET_URUNLER:
-        return await auto_reply(update, "❌ Ürün bulunamadı! /market ile listeye bak")
-    u = MARKET_URUNLER[kid]
+    # Hem sistem hem admin ödülleri
+    _ekstra = c.get("market_urunler_ekstra", {})
+    _tum_urunler = {**MARKET_URUNLER, **_ekstra}
+    if kid not in _tum_urunler:
+        return await auto_reply(update, "❌ Ürün bulunamadı! /magaza ile listeye bak")
+    u = _tum_urunler[kid]
     uid = str(update.effective_user.id)
     isim = update.effective_user.first_name
     b = get_bakiye(c, uid)
@@ -2220,17 +2444,24 @@ async def satin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Ürünün aktive edilmesi için admin ile iletişime geç.",
         parse_mode="HTML"
     )
-    # Adminlere bildir
+    # Adminlere bildir — inline butonlarla
     for aid in c.get("adminler", []):
         try:
             await context.bot.send_message(
                 aid,
-                f"🛒 <b>Market Satışı</b>\n\n"
-                f"Kullanıcı: {isim} (<code>{uid}</code>)\n"
-                f"Ürün: {u['isim']}\n"
-                f"Fiyat: {u['fiyat']:,} puan\n"
-                f"Aktive et veya bildir!",
-                parse_mode="HTML"
+                f"🛒 <b>Yeni Market Alışverişi!</b>\n"
+                f"{'━'*22}\n"
+                f"👤 Kullanıcı: <b>{isim}</b> (<code>{uid}</code>)\n"
+                f"🎁 Ürün: <b>{u['isim']}</b>\n"
+                f"💰 Fiyat: <b>{u['fiyat']:,} puan</b>\n"
+                f"📦 Kategori: {u.get('kategori','—')}\n"
+                f"{'━'*22}\n"
+                f"⚠️ Ürünü aktive etmeyi unutma!",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("📩 Kullanıcıya Yaz", url=f"tg://user?id={uid}"),
+                    InlineKeyboardButton("✅ Tamam", callback_data=f"mkt_aktive_{uid}_{kid}")
+                ]])
             )
         except: pass
 
@@ -2934,6 +3165,62 @@ async def mesaj_handler_v2(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=InlineKeyboardMarkup([[
                     InlineKeyboardButton("🔙 Panele Dön", callback_data="ap_s3")
                 ]]))
+        elif bekle and bekle.startswith("mkt_fiyat_gir_"):
+            kid = bekle.replace("mkt_fiyat_gir_", "")
+            try:
+                yeni_fiyat = int(metin_in.strip())
+                if yeni_fiyat < 0:
+                    raise ValueError
+                # Hem sabit hem custom override
+                ekstra = c.setdefault("market_urunler_ekstra", {})
+                tum = {**MARKET_URUNLER, **ekstra}
+                if kid in tum:
+                    ekstra[kid] = {**tum[kid], "fiyat": yeni_fiyat}
+                    save(c)
+                    context.user_data["bekle"] = None
+                    await update.message.reply_text(
+                        f"✅ Fiyat güncellendi!\n<code>{kid}</code>: <b>{yeni_fiyat:,} puan</b>",
+                        parse_mode="HTML",
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Market Paneli", callback_data="ap_market_yonet")]])
+                    )
+                else:
+                    await auto_reply(update, "❌ Ürün bulunamadı!")
+            except ValueError:
+                await auto_reply(update, "❌ Geçersiz! Sadece sayı gir. Örn: 500")
+
+        elif bekle == "mkt_yeni_gir":
+            # Format: kod|İsim|fiyat|açıklama
+            try:
+                parcalar = metin_in.strip().split("|")
+                if len(parcalar) < 3:
+                    raise ValueError("format")
+                kid_yeni = parcalar[0].strip().replace(" ", "_").lower()
+                isim_yeni = parcalar[1].strip()
+                fiyat_yeni = int(parcalar[2].strip())
+                aciklama_yeni = parcalar[3].strip() if len(parcalar) > 3 else ""
+                ekstra = c.setdefault("market_urunler_ekstra", {})
+                ekstra[kid_yeni] = {
+                    "isim": isim_yeni,
+                    "fiyat": fiyat_yeni,
+                    "kategori": "diger",
+                    "aciklama": aciklama_yeni
+                }
+                save(c)
+                context.user_data["bekle"] = None
+                await update.message.reply_text(
+                    f"✅ Yeni ödül eklendi!\n\n"
+                    f"Kod: <code>{kid_yeni}</code>\n"
+                    f"İsim: <b>{isim_yeni}</b>\n"
+                    f"Fiyat: <b>{fiyat_yeni:,} puan</b>\n\n"
+                    f"Üyeler /satin {kid_yeni} ile alabilir!",
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Market Paneli", callback_data="ap_market_yonet")]])
+                )
+            except ValueError as e:
+                await auto_reply(update,
+                    "❌ Format hatalı!\n\nDoğru format:\n<code>kod|İsim|fiyat|açıklama</code>\nÖrn: <code>ozel_renk|🎨 Özel Renk|500|Açıklama</code>",
+                    parse_mode="HTML")
+
         elif bekle == "adm_ekle_id":
             # Yeni admin ekleme: ID alındı → seviye seç
             try:
@@ -3223,7 +3510,7 @@ REHBER_ICERIK = {
         "🔝 grup_ust — 3.000p\n"
         "🛡 ban_kalkan — 2.500p\n"
         "❌ warn_sil — 1.500p (1 uyarı sil)\n\n"
-        "/market — ürün listesi\n"
+        "/magaza — ürün listesi\n"
         "/satin [urun_id] — satın al"
     ),
     "rehber_strateji": (
@@ -3264,6 +3551,156 @@ REHBER_ICERIK = {
         "Hangi konuda yardım istiyorsun?"
     ),
 }
+
+async def magaza_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Mağaza inline callback'leri"""
+    q    = update.callback_query
+    await q.answer()
+    d    = q.data
+    c    = cfg()
+    uid  = str(q.from_user.id)
+    isim = q.from_user.first_name
+
+    # Kategori sekmesi
+    if d.startswith("mgz_kat_"):
+        kat = d.replace("mgz_kat_", "")
+        await q.edit_message_text(
+            _magaza_metin(c, uid, kat),
+            parse_mode="HTML",
+            reply_markup=_magaza_kb(c, uid, kat)
+        )
+
+    # Ürün detayı
+    elif d.startswith("mgz_urun_"):
+        kid = d.replace("mgz_urun_", "")
+        _ekstra = c.get("market_urunler_ekstra", {})
+        tum     = {**MARKET_URUNLER, **_ekstra}
+        if kid not in tum:
+            return await q.answer("❌ Ürün bulunamadı!", show_alert=True)
+        u = tum[kid]
+        b = get_bakiye(c, uid)
+        kat = u.get("kategori", "diger")
+        alindi  = kid in c.get("satin_alinan", {}).get(uid, [])
+        afford  = b["puan"] >= u["fiyat"]
+        eksik   = u["fiyat"] - b["puan"]
+
+        if alindi:
+            durum_txt = "✅ Bu ürüne zaten sahipsin!"
+            butonlar  = [[InlineKeyboardButton("◀ Geri", callback_data=f"mgz_kat_{kat}")]]
+        elif not afford:
+            durum_txt = f"🔒 Yetersiz puan! Eksik: <b>{eksik:,} p</b>"
+            butonlar  = [
+                [InlineKeyboardButton("◀ Geri", callback_data=f"mgz_kat_{kat}")],
+            ]
+        else:
+            durum_txt = f"✅ Satın alabilirsin!"
+            butonlar  = [
+                [InlineKeyboardButton(f"🛒 SATIN AL — {u['fiyat']:,} p", callback_data=f"mgz_satin_{kid}")],
+                [InlineKeyboardButton("◀ Geri", callback_data=f"mgz_kat_{kat}")],
+            ]
+
+        await q.edit_message_text(
+            f"<b>{u['isim']}</b>\n"
+            f"{'━'*20}\n"
+            f"💰 Fiyat: <b>{u['fiyat']:,} puan</b>\n"
+            f"📋 {u.get('aciklama', '—')}\n"
+            f"🏷 Kategori: {KAT_ISIM.get(kat, kat)}\n"
+            f"{'━'*20}\n"
+            f"💳 Bakiyen: <b>{b['puan']:,} p</b>\n"
+            f"{durum_txt}",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(butonlar)
+        )
+
+    # Satın al (callback üzerinden)
+    elif d.startswith("mgz_satin_"):
+        kid = d.replace("mgz_satin_", "")
+        _ekstra = c.get("market_urunler_ekstra", {})
+        tum     = {**MARKET_URUNLER, **_ekstra}
+        if kid not in tum:
+            return await q.answer("❌ Ürün bulunamadı!", show_alert=True)
+        u  = tum[kid]
+        b  = get_bakiye(c, uid)
+        kat= u.get("kategori", "diger")
+
+        if b["puan"] < u["fiyat"]:
+            return await q.answer(f"❌ Yetersiz puan! {b['puan']:,}/{u['fiyat']:,}", show_alert=True)
+
+        # Zaten sahip mi?
+        if kid in c.get("satin_alinan", {}).get(uid, []):
+            return await q.answer("✅ Bu ürüne zaten sahipsin!", show_alert=True)
+
+        # Satın al
+        add_puan(c, uid, isim, -u["fiyat"])
+        satin_al = c.setdefault("satin_alinan", {}).setdefault(uid, [])
+        satin_al.append(kid)
+        # Başarım
+        if len(set(satin_al)) >= 3:
+            kontrol_basarim(c, uid, isim, "koleksiyoner")
+        save(c)
+
+        yeni_b = get_bakiye(c, uid)
+        await q.edit_message_text(
+            f"🎉 <b>Satın alındı!</b>\n"
+            f"{'━'*20}\n"
+            f"🎁 <b>{u['isim']}</b>\n"
+            f"💳 Ödenen: <b>{u['fiyat']:,} puan</b>\n"
+            f"💰 Kalan: <b>{yeni_b['puan']:,} puan</b>\n"
+            f"{'━'*20}\n"
+            f"⏳ Admin aktive edecek, bildirim gelecek!",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("◀ Mağazaya Dön", callback_data=f"mgz_kat_{kat}")
+            ]])
+        )
+        # Adminlere bildir
+        for aid in c.get("adminler", []):
+            try:
+                await context.bot.send_message(
+                    aid,
+                    f"🛒 <b>Yeni Market Alışverişi!</b>\n"
+                    f"{'━'*22}\n"
+                    f"👤 <b>{isim}</b> (<code>{uid}</code>)\n"
+                    f"🎁 <b>{u['isim']}</b>\n"
+                    f"💰 {u['fiyat']:,} puan\n"
+                    f"{'━'*22}\n"
+                    f"⚠️ Aktive etmeyi unutma!",
+                    parse_mode="HTML",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("📩 Yaz", url=f"tg://user?id={uid}"),
+                        InlineKeyboardButton("✅ Aktive Et", callback_data=f"mkt_aktive_{uid}_{kid}")
+                    ]])
+                )
+            except: pass
+
+    # Sahip olunan ürünler
+    elif d == "mgz_sahip":
+        satin_al = c.get("satin_alinan", {}).get(uid, [])
+        _ekstra = c.get("market_urunler_ekstra", {})
+        tum     = {**MARKET_URUNLER, **_ekstra}
+        if satin_al:
+            liste = "\n".join([f"✅ {tum[k]['isim']}" for k in satin_al if k in tum])
+        else:
+            liste = "Henüz bir şey almadın."
+        b = get_bakiye(c, uid)
+        _ekstra2 = c.get("market_urunler_ekstra", {})
+        tum2 = {**MARKET_URUNLER, **_ekstra2}
+        kategoriler2 = sorted(set(u.get("kategori","diger") for u in tum2.values()))
+        ilk_kat2 = "rozet" if "rozet" in kategoriler2 else (kategoriler2[0] if kategoriler2 else "diger")
+        await q.edit_message_text(
+            f"📦 <b>Satın Aldıklarım</b>\n{'━'*20}\n{liste}\n{'━'*20}\n💰 Bakiye: {b['puan']:,} p",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("◀ Mağazaya Dön", callback_data=f"mgz_kat_{ilk_kat2}")
+            ]])
+        )
+
+    elif d in ("mgz_bos", "mgz_kapat"):
+        if d == "mgz_kapat":
+            await q.edit_message_text("🏪 Mağaza kapatıldı.", reply_markup=None)
+        else:
+            await q.answer()
+
 
 async def rehber_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Rehber inline buton callback'leri"""
@@ -5754,7 +6191,7 @@ async def puan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"⭐ Seviye: <b>{sev}</b>\n"
         f"[{bar}]\n"
         f"📍 Sonraki seviyeye: {kalan:,} puan\n\n"
-        f"/gorev /market /bonus /kazan"
+        f"/gorev /magaza /bonus /kazan"
     )
     await dm_veya_grup(update, context, metin, f"💰 Bakiye DM'ine gönderildi!")
 
@@ -6156,7 +6593,7 @@ KOMUTLAR_KATEGORILER = {
         ("/hbonus", "Haftalık bonus al"),
         ("/kazan", "Mini görev (günlük 3 hak)"),
         ("/gorev", "Görevleri gör"),
-        ("/market", "Marketten ürün al"),
+        ("/magaza", "Marketten ürün al"),
         ("/transfer @user miktar", "Puan gönder"),
         ("/ref", "Referans kodunu gör"),
         ("/top", "Liderlik tablosu"),
@@ -6470,6 +6907,49 @@ def _start_metin(c, sekme="genel"):
     return sekmeler.get(sekme, sekmeler["genel"])
 
 
+async def bot_erisim_degisti(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Bot bir kanala/gruba eklenince veya çıkarılınca otomatik kaydet"""
+    if not update.my_chat_member:
+        return
+    chat = update.my_chat_member.chat
+    yeni_durum = update.my_chat_member.new_chat_member.status
+    c = cfg()
+
+    # Bot admin/üye oldu → keşfedilen kanallara ekle
+    if yeni_durum in ("administrator", "member"):
+        kef = c.setdefault("kesfedilen_kanallar", {})
+        chat_id_str = str(chat.id)
+        chat_tip = "📢" if chat.type == "channel" else "👥"
+        kef[chat_id_str] = {
+            "isim": f"{chat_tip} {chat.title or chat.username or chat_id_str}",
+            "tip":  chat.type,
+            "eklenme": bugun()
+        }
+        save(c)
+        # Adminlere bildir
+        for aid in c.get("adminler", []):
+            try:
+                await context.bot.send_message(
+                    aid,
+                    f"🔔 <b>Bot yeni bir {'kanala' if chat.type == 'channel' else 'gruba'} eklendi!</b>\n\n"
+                    f"{'📢' if chat.type == 'channel' else '👥'} <b>{chat.title or 'Bilinmiyor'}</b>\n"
+                    f"🆔 <code>{chat.id}</code>\n\n"
+                    f"Admin paneli → Kanallar → listede görünür, 1 tıkla ekle!",
+                    parse_mode="HTML"
+                )
+            except:
+                pass
+
+    # Bot çıkarıldı/ayrıldı → keşfedilen listeden kaldır
+    elif yeni_durum in ("left", "kicked", "banned"):
+        kef = c.get("kesfedilen_kanallar", {})
+        kef.pop(str(chat.id), None)
+        # Kayıtlı kanallardan da kaldır
+        kanallar = c.get("kanallar", [])
+        c["kanallar"] = [k for k in kanallar if k.get("id") != str(chat.id)]
+        save(c)
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Bot ana komutu — üye için sekmeli panel, admin için admin paneli"""
     context.user_data.clear()
@@ -6537,7 +7017,7 @@ async def start_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cmd = data.replace("start_cmd_", "")
         CMD_MAP = {
             "bakiye": bakiye_cmd, "bonus": bonus_cmd, "hbonus": hbonus_cmd,
-            "seviye": seviye_cmd, "gorev": gorev_cmd, "market": market_cmd,
+            "seviye": seviye_cmd, "gorev": gorev_cmd, "magaza": magaza_cmd,
             "profil": profil_cmd, "top": top_cmd, "vip": vip_cmd,
             "ref": ref_cmd, "istat": istat_cmd, "ping": ping_cmd,
             "sponsorlar": sponsorlar_cmd, "rehber": rehber_cmd,
@@ -6664,7 +7144,7 @@ def main():
     app.add_handler(CommandHandler("ref",     ref_cmd))
     app.add_handler(CommandHandler("uyeol",   uyeol_cmd))
     app.add_handler(CommandHandler("gorev",   gorev_cmd))
-    app.add_handler(CommandHandler("market",  market_cmd))
+    app.add_handler(CommandHandler("magaza",     magaza_cmd))
     app.add_handler(CommandHandler("satin",   satin_cmd))
 
     # Casino — Temel
@@ -6701,10 +7181,12 @@ def main():
     app.add_handler(CallbackQueryHandler(jackpot_cb,    pattern="^jackpot_"))
     app.add_handler(CallbackQueryHandler(kbj_cb,        pattern="^kbj_"))
     app.add_handler(CallbackQueryHandler(mac_tahmin_cb, pattern="^mac_"))
+    app.add_handler(CallbackQueryHandler(magaza_cb,  pattern="^mgz_"))
     app.add_handler(CallbackQueryHandler(rehber_cb, pattern="^rehber_"))
     app.add_handler(CallbackQueryHandler(cb_v2))
     app.add_handler(ChatJoinRequestHandler(join_handler))
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, yeni_uye))
+    app.add_handler(ChatMemberHandler(bot_erisim_degisti, ChatMemberHandler.MY_CHAT_MEMBER))
     app.add_handler(ChatJoinRequestHandler(join_request_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, sponsor_mesaj_handler))
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, mesaj_handler_v2))
