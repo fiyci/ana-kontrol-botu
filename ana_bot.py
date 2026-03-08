@@ -14,7 +14,8 @@ from telegram.ext import (
 
 BOT_TOKEN = "8743351745:AAGgX51IjWqSxNC6HY8yLINyabZ_4Dfq_Ow"
 FUTBOL_API_KEY = "4a30a8265295ef0a6ec013630adc4def"  # api-football.com
-CONFIG    = "config.json"
+CONFIG = os.environ.get("CONFIG_PATH", "/tmp/config.json")
+# /tmp Railway'de her deploy'da sıfırlanır ama startup'ta Telegram'dan restore edilir
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -157,24 +158,64 @@ def _normalize_kanallar(c):
     return c
 
 def cfg():
+    # 1. Önce local dosyaya bak (en hızlı)
     if os.path.exists(CONFIG):
         try:
             with open(CONFIG, encoding="utf-8") as f:
                 data = json.load(f)
             for k, v in DEFAULT.items():
                 if k not in data: data[k] = v
-            # API key her zaman güncel kalsın
             if not data.get("futbol_api_key"):
                 data["futbol_api_key"] = FUTBOL_API_KEY
             return data
-        except: pass
+        except:
+            pass
+    
+    # 2. Local yok → startup'ta Telegram'dan restore edilecek, şimdilik DEFAULT
     d = DEFAULT.copy()
     d["futbol_api_key"] = FUTBOL_API_KEY
-    save(d); return d
+    save(d)
+    return d
+
+# Config yedekleme için global bot referansı
+_bot_ref = None
 
 def save(c):
+    """Config'i kaydet — local dosya + Telegram DM backup"""
     with open(CONFIG, "w", encoding="utf-8") as f:
         json.dump(c, f, ensure_ascii=False, indent=2)
+    # Telegram DM backup (async olmadığı için job queue ile)
+    _schedule_telegram_backup(c)
+
+_backup_scheduled = False
+_pending_backup = None
+
+def _schedule_telegram_backup(c):
+    """Telegram backup'ı async job olarak planla"""
+    global _pending_backup
+    _pending_backup = c  # En son config'i tut
+
+async def _do_telegram_backup(context):
+    """Job queue ile çalışan gerçek backup fonksiyonu"""
+    global _pending_backup, _backup_scheduled
+    _backup_scheduled = False
+    if _pending_backup is None:
+        return
+    c = _pending_backup
+    _pending_backup = None
+    try:
+        import base64, zlib
+        compressed = zlib.compress(json.dumps(c, ensure_ascii=False).encode(), level=6)
+        encoded = base64.b64encode(compressed).decode()
+        # Config'i sahibe DM olarak gönder — özel marker ile
+        await context.bot.send_message(
+            SAHIP_ID,
+            f"⚙️CONFIG_BACKUP⚙️\n{encoded}",
+            disable_notification=True
+        )
+    except Exception as e:
+        pass  # Backup başarısız olsa da devam et
+
 
 def is_admin(uid):
     return uid in cfg().get("adminler", [])
@@ -499,6 +540,46 @@ async def _yetkili_ekle(update: Update, context: ContextTypes.DEFAULT_TYPE, hede
         f"ID: <code>{hedef_uid}</code>\n\n"
         f"👑 Admin yönetimi için: /start → ⚙️ Ayarlar → Admin Yönetimi",
         parse_mode="HTML")
+
+
+async def _startup_config_restore(app):
+    """Bot başlarken Telegram DM'den config'i geri yükle"""
+    if os.path.exists(CONFIG):
+        try:
+            with open(CONFIG, encoding="utf-8") as f:
+                data = json.load(f)
+            if data.get("adminler"):  # Geçerli config var
+                logger.info("✅ Config local dosyadan yüklendi")
+                return
+        except:
+            pass
+    
+    # Local yok → Telegram'dan geri yükle
+    logger.info("🔄 Config Telegram'dan geri yükleniyor...")
+    try:
+        import base64, zlib
+        # Sahibe ait son mesajları tara
+        updates = await app.bot.get_updates(limit=100, timeout=5)
+        for update in reversed(updates):
+            if (update.message and 
+                update.message.chat.id == SAHIP_ID and
+                update.message.text and
+                update.message.text.startswith("⚙️CONFIG_BACKUP⚙️")):
+                encoded = update.message.text.replace("⚙️CONFIG_BACKUP⚙️\n", "")
+                compressed = base64.b64decode(encoded)
+                config_str = zlib.decompress(compressed).decode()
+                restored = json.loads(config_str)
+                # DEFAULT key'lerini ekle
+                for k, v in DEFAULT.items():
+                    if k not in restored: restored[k] = v
+                with open(CONFIG, "w", encoding="utf-8") as f:
+                    json.dump(restored, f, ensure_ascii=False, indent=2)
+                logger.info("✅ Config Telegram'dan geri yüklendi!")
+                return
+    except Exception as e:
+        logger.warning(f"Telegram restore başarısız: {e}")
+    
+    logger.warning("Config bulunamadı, varsayılanlarla başlatılıyor")
 
 
 async def cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -6653,6 +6734,11 @@ def main():
         import asyncio as _aio2
         _aio2.get_event_loop().run_until_complete(app.bot.set_my_commands(cmds))
     except: pass
+    # Startup: Telegram'dan config geri yükle
+    async def post_init(app):
+        await _startup_config_restore(app)
+    app.post_init = post_init
+
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
