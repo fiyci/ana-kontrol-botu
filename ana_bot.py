@@ -803,7 +803,7 @@ async def bonus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id); isim = update.effective_user.first_name
     if c["gunluk_bonus_al"].get(uid,"") == bugun():
         streak = c.get("streak_kayitlar",{}).get(uid,{}).get("gun",0)
-        return await update.message.reply_text(f"Bugun bonusunu aldin.\nSerin: {streak} gun. Yarin tekrar gel!")
+        return await auto_reply(update, f"Bugun bonusunu aldin.\nSerin: {streak} gun. Yarin tekrar gel!")
     if "streak_kayitlar" not in c: c["streak_kayitlar"] = {}
     sd = c["streak_kayitlar"].get(uid, {"gun":0,"son":""})
     dun = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
@@ -830,23 +830,23 @@ async def bonus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if sev >= 10: gorev_tamamla(c, uid, isim, "sev10")
     if is_vip(c, uid): gorev_tamamla(c, uid, isim, "vip_ol")
     save(c)
-    await dm_veya_grup(update, context, msg, "🎁 {isim} günlük bonus aldı!")
+    await dm_veya_grup(update, context, msg, f"🎁 {isim} günlük bonus aldı!")
 
 async def transfer_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     c=cfg()
     if not c["bakiye_aktif"]: return
-    if len(context.args)<2: return await update.message.reply_text("Kullanım: /transfer @kullanıcı 100")
+    if len(context.args)<2: return await auto_reply(update, "Kullanım: /transfer @kullanıcı 100")
     uid=str(update.effective_user.id); isim=update.effective_user.first_name
     try:
         miktar=int(context.args[1])
         gonderen=get_bakiye(c, uid)
-        if gonderen["puan"]<miktar: return await update.message.reply_text("❌ Yetersiz bakiye!")
-        if miktar<=0: return await update.message.reply_text("❌ Geçersiz miktar!")
+        if gonderen["puan"]<miktar: return await auto_reply(update, "❌ Yetersiz bakiye!")
+        if miktar<=0: return await auto_reply(update, "❌ Geçersiz miktar!")
         # Hedef kullanıcıyı bul (reply veya @username)
         if update.message.reply_to_message:
             hedef_uid=str(update.message.reply_to_message.from_user.id)
             hedef_isim=update.message.reply_to_message.from_user.first_name
-        else: return await update.message.reply_text("Transfer için bir mesajı yanıtla!")
+        else: return await auto_reply(update, "Transfer için bir mesajı yanıtla!")
         gonderen["puan"]-=miktar
         hedef=get_bakiye(c, hedef_uid); hedef["puan"]+=miktar; hedef["isim"]=hedef_isim
         save(c)
@@ -902,64 +902,97 @@ import asyncio as _asyncio
 # GRUP TEMİZLİĞİ — Casino/bakiye sonuçları DM'e gider
 # ══════════════════════════════════════════════════
 
+async def _auto_delete(msg, sure=4):
+    """Grup mesajını N saniye sonra sil"""
+    await _asyncio.sleep(sure)
+    try:
+        await msg.delete()
+    except:
+        pass
+
+
+async def auto_reply(update: Update, metin: str, parse_mode="HTML", sure=4):
+    """Kısa hata/kullanım mesajı: gruplarda sure saniye sonra sil"""
+    msg = await update.message.reply_text(metin, parse_mode=parse_mode)
+    if update.effective_chat.type != "private":
+        _asyncio.create_task(_auto_delete(msg, sure))
+    return msg
+
+
 async def dm_veya_grup(update: Update, context, metin: str,
                        grup_ozet: str = None, parse_mode: str = "HTML"):
     """
-    Grup: kısa özet gruba + tam sonuç DM'e
-    Private: direkt reply
+    Private: direkt mesaj
+    Grup: tam sonuç DM'e → gruba kısa özet → 4sn sonra sil
     """
-    chat_type = update.effective_chat.type
     uid = update.effective_user.id
+    chat_type = update.effective_chat.type
 
     if chat_type == "private":
         await update.message.reply_text(metin, parse_mode=parse_mode)
         return
 
-    # Grup → DM'e gönder
+    # DM gönder
+    dm_ok = False
     try:
         await context.bot.send_message(uid, metin, parse_mode=parse_mode)
-        ozet = grup_ozet or "📩 Sonuç DM'ine gönderildi!"
-        await update.message.reply_text(ozet, parse_mode=parse_mode)
-    except Exception:
-        # DM kapalıysa gruba yaz (kısa versiyon)
-        await update.message.reply_text(metin, parse_mode=parse_mode)
+        dm_ok = True
+    except Exception as e:
+        logger.warning(f"DM gönderilemedi {uid}: {e}")
+
+    ozet = grup_ozet or ("📩 Sonuç DM'ine gönderildi!" if dm_ok else metin[:150])
+    ozet_msg = await update.message.reply_text(ozet, parse_mode=parse_mode)
+    # Grup mesajını 4sn sonra sil
+    _asyncio.create_task(_auto_delete(ozet_msg, 4))
 
 
 async def dm_anim_veya_grup(update: Update, context, anim_metin: str,
-                             sonuc_metin: str, grup_ozet: str = None,
-                             sure: float = 1.2, parse_mode="HTML"):
+                             sonuc_metin, grup_ozet: str = None,
+                             sure: float = 1.2, parse_mode: str = "HTML"):
     """
-    Animasyonlu versiyon:
-    Private: anim mesajı → edit ile sonuç
-    Grup: gruba kısa "oynuyor..." → sil → DM'e sonuç → gruba özet
+    Private: animasyonlu mesaj → edit ile sonuç
+    Grup: kısa anim → sil → DM'e sonuç → gruba özet → 4sn sil
     """
-    chat_type = update.effective_chat.type
     uid = update.effective_user.id
+    chat_type = update.effective_chat.type
 
     if chat_type == "private":
         msg = await update.message.reply_text(anim_metin)
         await _asyncio.sleep(sure)
-        await msg.edit_text(sonuc_metin, parse_mode=parse_mode)
+        try:
+            await msg.edit_text(sonuc_metin, parse_mode=parse_mode)
+        except:
+            await update.message.reply_text(sonuc_metin, parse_mode=parse_mode)
         return
 
-    # Grup: kısa animasyon mesajı gönder, sonra sil
+    # Grup: anim mesajı → bekle → sil
+    anim_msg = None
     try:
         anim_msg = await update.message.reply_text(anim_metin)
         await _asyncio.sleep(sure)
+    except:
+        pass
+
+    # DM'e tam sonucu gönder
+    dm_ok = False
+    try:
+        await context.bot.send_message(uid, sonuc_metin, parse_mode=parse_mode)
+        dm_ok = True
+    except Exception as e:
+        logger.warning(f"DM gönderilemedi {uid}: {e}")
+
+    # Anim mesajını sil
+    if anim_msg:
         try:
             await anim_msg.delete()
         except:
             pass
-        # DM'e sonucu gönder
-        await context.bot.send_message(uid, sonuc_metin, parse_mode=parse_mode)
-        ozet = grup_ozet or "📩 Sonuç DM'ine gönderildi!"
-        await update.message.reply_text(ozet, parse_mode=parse_mode)
-    except Exception:
-        # DM kapalıysa gruba yaz
-        msg = await update.message.reply_text(anim_metin)
-        await _asyncio.sleep(sure)
-        await msg.edit_text(sonuc_metin, parse_mode=parse_mode)
 
+    # Gruba kısa özet → 4sn sil
+    isim = update.effective_user.first_name
+    ozet = grup_ozet or ("📩 Sonuç DM'ine gönderildi!" if dm_ok else sonuc_metin[:150])
+    ozet_msg = await update.message.reply_text(ozet, parse_mode=parse_mode)
+    _asyncio.create_task(_auto_delete(ozet_msg, 4))
 
 async def _casino_anim(msg, metin, sure=1.2):
     """Yükleniyor animasyonu → sonuç"""
@@ -978,7 +1011,7 @@ async def zar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML")
     try:
         hata, bahis = bahis_kontrol(c, uid, context.args[0])
-        if hata: return await update.message.reply_text(hata)
+        if hata: return await auto_reply(update, hata)
         _anim_str = "🎲 Zarlar atılıyor..."
         zar1 = random.randint(1,6); zar2 = random.randint(1,6)
         ze = ["1️⃣","2️⃣","3️⃣","4️⃣","5️⃣","6️⃣"]
@@ -1007,13 +1040,13 @@ async def tura_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML")
     try:
         hata, bahis = bahis_kontrol(c, uid, context.args[0])
-        if hata: return await update.message.reply_text(hata)
+        if hata: return await auto_reply(update, hata)
         tahmin_raw = context.args[1].lower() if len(context.args) > 1 else "yazı"
         # yazı/y/yazi → yazı | tura/t → tura
         if tahmin_raw in ("yazı","yazi","y"): tahmin = "yazı"
         elif tahmin_raw in ("tura","t"): tahmin = "tura"
         else:
-            return await update.message.reply_text("❌ Tahmin: yazı veya tura\nÖrnek: /tura 100 yazı")
+            return await auto_reply(update, "❌ Tahmin: yazı veya tura\nÖrnek: /tura 100 yazı")
         _anim_str = "🪙 Para atılıyor..."
         sonuc = random.choice(["yazı","tura"])
         emoji = "🪙" if sonuc == "yazı" else "💫"
@@ -1037,10 +1070,10 @@ async def slot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     isim = update.effective_user.first_name
     if not context.args:
-        return await update.message.reply_text("🎰 Kullanım: /slot [bahis]")
+        return await auto_reply(update, "🎰 Kullanım: /slot [bahis]")
     try:
         hata, bahis = bahis_kontrol(c, uid, context.args[0])
-        if hata: return await update.message.reply_text(hata)
+        if hata: return await auto_reply(update, hata)
         msg = await update.message.reply_text("🎰 Kollar çekiliyor...\n⬛ ⬛ ⬛")
         semboller = ["🍒","🍋","🍊","🍇","💎","7️⃣","⭐","🔔"]
         s = [random.choice(semboller) for _ in range(3)]
@@ -1078,7 +1111,7 @@ async def rulet_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Örnek: /rulet 100 kırmızı", parse_mode="HTML")
     try:
         hata, bahis = bahis_kontrol(c, uid, context.args[0])
-        if hata: return await update.message.reply_text(hata)
+        if hata: return await auto_reply(update, hata)
         tahmin = " ".join(context.args[1:]).lower()
         _anim_str = "🎡 Rulet dönüyor..."
         sayi = random.randint(0, 36)
@@ -1116,10 +1149,10 @@ async def balik_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     isim = update.effective_user.first_name
     if not context.args:
-        return await update.message.reply_text("🎣 Kullanım: /balik [bahis]")
+        return await auto_reply(update, "🎣 Kullanım: /balik [bahis]")
     try:
         hata, bahis = bahis_kontrol(c, uid, context.args[0])
-        if hata: return await update.message.reply_text(hata)
+        if hata: return await auto_reply(update, hata)
         _anim_str = "🎣 Olta atıldı... 🌊"
         baliklar = [
             ("🦐","Karides",0.5),("🐟","Ufak Balık",1.0),
@@ -1151,12 +1184,12 @@ async def tahmin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     isim = update.effective_user.first_name
     if not context.args or len(context.args) < 2:
-        return await update.message.reply_text("🔢 Kullanım: /tahmin [bahis] [1-10]")
+        return await auto_reply(update, "🔢 Kullanım: /tahmin [bahis] [1-10]")
     try:
         hata, bahis = bahis_kontrol(c, uid, context.args[0])
-        if hata: return await update.message.reply_text(hata)
+        if hata: return await auto_reply(update, hata)
         if not context.args[1].isdigit() or not (1 <= int(context.args[1]) <= 10):
-            return await update.message.reply_text("❌ 1 ile 10 arasında sayı gir!")
+            return await auto_reply(update, "❌ 1 ile 10 arasında sayı gir!")
         tahmin = int(context.args[1])
         _anim_str = "🔢 Sayı seçiliyor..."
         sayi = random.randint(1, 10)
@@ -1183,10 +1216,10 @@ async def kart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     isim = update.effective_user.first_name
     if not context.args:
-        return await update.message.reply_text("🃏 Kullanım: /kart [bahis]")
+        return await auto_reply(update, "🃏 Kullanım: /kart [bahis]")
     try:
         hata, bahis = bahis_kontrol(c, uid, context.args[0])
-        if hata: return await update.message.reply_text(hata)
+        if hata: return await auto_reply(update, hata)
         _anim_str = "🃏 Kartlar dağıtılıyor..."
         kartlar = ["A","2","3","4","5","6","7","8","9","10","J","Q","K"]
         deger = {"A":11,"2":2,"3":3,"4":4,"5":5,"6":6,"7":7,"8":8,"9":9,"10":10,"J":10,"Q":10,"K":10}
@@ -1219,13 +1252,13 @@ async def yuksek_alcak_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     isim = update.effective_user.first_name
     if not context.args or len(context.args) < 2:
-        return await update.message.reply_text("📈 Kullanım: /ya [bahis] [yüksek/düşük]")
+        return await auto_reply(update, "📈 Kullanım: /ya [bahis] [yüksek/düşük]")
     try:
         hata, bahis = bahis_kontrol(c, uid, context.args[0])
-        if hata: return await update.message.reply_text(hata)
+        if hata: return await auto_reply(update, hata)
         tahmin = context.args[1].lower()
         if tahmin not in ("yüksek","yuksek","y","düşük","dusuk","d"):
-            return await update.message.reply_text("❌ yüksek veya düşük yaz\nÖrnek: /ya 100 yüksek")
+            return await auto_reply(update, "❌ yüksek veya düşük yaz\nÖrnek: /ya 100 yüksek")
         _anim_str = "📈 Kart çekiliyor..."
         sayi = random.randint(1,13)
         isim_k = ["A","2","3","4","5","6","7","8","9","10","J","Q","K"][sayi-1]
@@ -1253,10 +1286,10 @@ async def tombala_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     isim = update.effective_user.first_name
     if not context.args:
-        return await update.message.reply_text("🎱 Kullanım: /tombala [bahis]")
+        return await auto_reply(update, "🎱 Kullanım: /tombala [bahis]")
     try:
         hata, bahis = bahis_kontrol(c, uid, context.args[0])
-        if hata: return await update.message.reply_text(hata)
+        if hata: return await auto_reply(update, hata)
         _anim_str = "🎱 Tombala başlıyor..."
         kart = sorted(random.sample(range(1,90), 15))
         cekilen = sorted(random.sample(range(1,90), 30))
@@ -1282,10 +1315,10 @@ async def savas_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     isim = update.effective_user.first_name
     if not context.args:
-        return await update.message.reply_text("⚔️ Kullanım: /savas [bahis]")
+        return await auto_reply(update, "⚔️ Kullanım: /savas [bahis]")
     try:
         hata, bahis = bahis_kontrol(c, uid, context.args[0])
-        if hata: return await update.message.reply_text(hata)
+        if hata: return await auto_reply(update, hata)
         _anim_str = "⚔️ Savaş başlıyor..."
         kartlar = list(range(1,14))*4
         oyuncu = sorted(random.sample(kartlar, 5), reverse=True)
@@ -1315,10 +1348,10 @@ async def hediye_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     isim = update.effective_user.first_name
     if not context.args:
-        return await update.message.reply_text("🎁 Kullanım: /hediye [bahis]")
+        return await auto_reply(update, "🎁 Kullanım: /hediye [bahis]")
     try:
         hata, bahis = bahis_kontrol(c, uid, context.args[0])
-        if hata: return await update.message.reply_text(hata)
+        if hata: return await auto_reply(update, hata)
         _anim_str = "🎁 Kutu açılıyor..."
         kutular = [
             ("💣","Bomba!",0),("🎁","Küçük Hediye",1.0),
@@ -1348,10 +1381,10 @@ async def bowling_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     isim = update.effective_user.first_name
     if not context.args:
-        return await update.message.reply_text("🎳 Kullanım: /bowling [bahis]")
+        return await auto_reply(update, "🎳 Kullanım: /bowling [bahis]")
     try:
         hata, bahis = bahis_kontrol(c, uid, context.args[0])
-        if hata: return await update.message.reply_text(hata)
+        if hata: return await auto_reply(update, hata)
         _anim_str = "🎳 Top yuvarlanıyor..."
         def atis():
             pins = random.randint(0,10)
@@ -1385,10 +1418,10 @@ async def dart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     isim = update.effective_user.first_name
     if not context.args:
-        return await update.message.reply_text("🎯 Kullanım: /dart [bahis]")
+        return await auto_reply(update, "🎯 Kullanım: /dart [bahis]")
     try:
         hata, bahis = bahis_kontrol(c, uid, context.args[0])
-        if hata: return await update.message.reply_text(hata)
+        if hata: return await auto_reply(update, hata)
         _anim_str = "🎯 Ok fırlatılıyor..."
         hedefler = [
             ("🎯","BULLSEYE",3.0,5),("🟡","İç Halka",2.0,15),
@@ -1418,10 +1451,10 @@ async def basketbol_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     isim = update.effective_user.first_name
     if not context.args:
-        return await update.message.reply_text("🏀 Kullanım: /basketbol [bahis]")
+        return await auto_reply(update, "🏀 Kullanım: /basketbol [bahis]")
     try:
         hata, bahis = bahis_kontrol(c, uid, context.args[0])
-        if hata: return await update.message.reply_text(hata)
+        if hata: return await auto_reply(update, hata)
         _anim_str = "🏀 Top atılıyor..."
         atislar = []
         toplam = 0
@@ -1459,7 +1492,7 @@ async def mines_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML")
     try:
         hata, bahis = bahis_kontrol(c, uid, context.args[0])
-        if hata: return await update.message.reply_text(hata)
+        if hata: return await auto_reply(update, hata)
         mayın_sayi = int(context.args[1]) if len(context.args)>1 else 5
         mayın_sayi = max(1, min(20, mayın_sayi))
         _anim_str = "💣 Mayın tarlası hazırlanıyor..."
@@ -1554,7 +1587,7 @@ async def gorev_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def ver_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin komutu: /ver @kullanıcı [miktar]"""
     if not is_admin(update.effective_user.id): return
-    if len(context.args) < 2: return await update.message.reply_text("Kullanım: /ver [user_id] [miktar]")
+    if len(context.args) < 2: return await auto_reply(update, "Kullanım: /ver [user_id] [miktar]")
     c = cfg()
     try:
         uid2 = str(context.args[0]).replace("@","")
@@ -1568,7 +1601,7 @@ async def ver_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def al_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin komutu: /al [user_id] [miktar] — Puan düş"""
     if not is_admin(update.effective_user.id): return
-    if len(context.args) < 2: return await update.message.reply_text("Kullanım: /al [user_id] [miktar]")
+    if len(context.args) < 2: return await auto_reply(update, "Kullanım: /al [user_id] [miktar]")
     c = cfg()
     try:
         uid2 = str(context.args[0])
@@ -1580,7 +1613,7 @@ async def al_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def sifirla_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin: /sifirla [user_id] — Bakiyeyi sıfırla"""
     if not is_admin(update.effective_user.id): return
-    if not context.args: return await update.message.reply_text("Kullanım: /sifirla [user_id]")
+    if not context.args: return await auto_reply(update, "Kullanım: /sifirla [user_id]")
     c = cfg()
     uid2 = str(context.args[0])
     if uid2 in c["bakiyeler"]:
@@ -1653,10 +1686,10 @@ async def market_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def satin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     c = cfg()
     if not context.args:
-        return await update.message.reply_text("Kullanım: /satin [urun_kodu]\n/market ile listeye bak")
+        return await auto_reply(update, "Kullanım: /satin [urun_kodu]\n/market ile listeye bak")
     kid = context.args[0]
     if kid not in MARKET_URUNLER:
-        return await update.message.reply_text("❌ Ürün bulunamadı! /market ile listeye bak")
+        return await auto_reply(update, "❌ Ürün bulunamadı! /market ile listeye bak")
     u = MARKET_URUNLER[kid]
     uid = str(update.effective_user.id)
     isim = update.effective_user.first_name
@@ -1804,7 +1837,7 @@ async def dm_listesi_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     c = cfg()
     kullanicilar = c.get("kullanicilar", {})
     if not kullanicilar:
-        return await update.message.reply_text("Henüz kimse kayıtlı.")
+        return await auto_reply(update, "Henüz kimse kayıtlı.")
 
     satirlar = []
     for uid, u in list(kullanicilar.items())[:50]:  # Maks 50 göster
@@ -1927,7 +1960,7 @@ async def hbonus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     isim = update.effective_user.first_name
     hkey = datetime.now().strftime("%Y-W%W")
     if c.get("haftalik_bonus_al", {}).get(uid, "") == hkey:
-        return await update.message.reply_text("Bu hafta haftalik bonusunu aldin. Pazartesi tekrar gel!")
+        return await auto_reply(update, "Bu hafta haftalik bonusunu aldin. Pazartesi tekrar gel!")
     haftalik = c.get("haftalik_bonus", 500)
     yeni = add_puan(c, uid, isim, haftalik)
     c.setdefault("haftalik_bonus_al", {})[uid] = hkey
@@ -2189,7 +2222,7 @@ async def mesaj_handler_v2(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parcalar = update.message.text.strip().split()
             yeni_uid, sev = int(parcalar[0]), int(parcalar[1])
             if sev not in [1, 2, 3]:
-                return await update.message.reply_text("❌ Seviye 1, 2 veya 3 olmalı!")
+                return await auto_reply(update, "❌ Seviye 1, 2 veya 3 olmalı!")
             c = cfg()
             if yeni_uid not in c["adminler"]:
                 c["adminler"].append(yeni_uid)
@@ -2845,13 +2878,13 @@ async def futbol_tahmin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mid = context.args[0].upper()
     maclar = c.get("futbol_maclar", {})
     if mid not in maclar:
-        return await update.message.reply_text(f"❌ [{mid}] ID'li maç bulunamadı. /maclar ile kontrol et.")
+        return await auto_reply(update, f"❌ [{mid}] ID'li maç bulunamadı. /maclar ile kontrol et.")
 
     m = maclar[mid]
     if m.get("durum") == "bitti":
-        return await update.message.reply_text("❌ Bu maç tamamlandı, tahmin yapılamaz!")
+        return await auto_reply(update, "❌ Bu maç tamamlandı, tahmin yapılamaz!")
     if m.get("durum") == "canli":
-        return await update.message.reply_text("❌ Maç başladı, tahmin kapalı!")
+        return await auto_reply(update, "❌ Maç başladı, tahmin kapalı!")
 
     secim_raw = context.args[1].upper()
     # Tam skor mu (2-1 gibi) yoksa 1/X/2 mi?
@@ -2859,7 +2892,7 @@ async def futbol_tahmin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Tam skor tahmini
         parca = secim_raw.split("-")
         if len(parca) != 2 or not all(p.isdigit() for p in parca):
-            return await update.message.reply_text("❌ Geçersiz skor formatı. Örnek: /tahmin ABC123 2-1")
+            return await auto_reply(update, "❌ Geçersiz skor formatı. Örnek: /tahmin ABC123 2-1")
         secim = secim_raw  # "2-1"
         tip = "skor"
         odul = c.get("futbol_kazanc",{}).get("skor", 300)
@@ -2871,7 +2904,7 @@ async def futbol_tahmin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         label = {"1": f"🏠 {m.get('ev','?')} kazanır", "X": "🤝 Beraberlik", "2": f"🚌 {m.get('deplasman','?')} kazanır"}
         secim_goster = label[secim]
     else:
-        return await update.message.reply_text("❌ Geçersiz tahmin. 1, X, 2 veya 2-1 gibi skor gir.")
+        return await auto_reply(update, "❌ Geçersiz tahmin. 1, X, 2 veya 2-1 gibi skor gir.")
 
     # Kaydet
     tahminler = c.setdefault("futbol_tahminler", {})
@@ -2953,7 +2986,7 @@ async def tahmin_top_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not c.get("futbol_aktif", True): return
     stats = c.get("futbol_tahmin_stats", {})
     if not stats:
-        return await update.message.reply_text("Henüz tahmin istatistiği yok. /maclar ile tahmin yap!")
+        return await auto_reply(update, "Henüz tahmin istatistiği yok. /maclar ile tahmin yap!")
 
     sirali = sorted(stats.items(),
         key=lambda x: (x[1].get("dogru",0), x[1].get("toplam_puan",0)),
@@ -3075,12 +3108,12 @@ async def mac_baslat_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin: /mac_baslat [MAC_ID] — Maçı canlı yap"""
     if not is_admin(update.effective_user.id): return
     if not context.args:
-        return await update.message.reply_text("Kullanım: /mac_baslat [MAC_ID]")
+        return await auto_reply(update, "Kullanım: /mac_baslat [MAC_ID]")
     mid = context.args[0].upper()
     c = cfg()
     maclar = c.get("futbol_maclar", {})
     if mid not in maclar:
-        return await update.message.reply_text(f"❌ [{mid}] bulunamadı.")
+        return await auto_reply(update, f"❌ [{mid}] bulunamadı.")
     maclar[mid]["durum"] = "canli"
     save(c)
     m = maclar[mid]
@@ -3105,11 +3138,11 @@ async def mac_bitir_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     c = cfg()
     maclar = c.get("futbol_maclar", {})
     if mid not in maclar:
-        return await update.message.reply_text(f"❌ [{mid}] bulunamadı.")
+        return await auto_reply(update, f"❌ [{mid}] bulunamadı.")
 
     # Skor doğrula
     if "-" not in skor or not all(p.isdigit() for p in skor.split("-")):
-        return await update.message.reply_text("❌ Geçersiz skor. Örnek: 2-1")
+        return await auto_reply(update, "❌ Geçersiz skor. Örnek: 2-1")
 
     maclar[mid]["durum"] = "bitti"
     maclar[mid]["skor"] = skor
@@ -3208,11 +3241,11 @@ async def mac_iptal_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin: /mac_iptal [MAC_ID]"""
     if not is_admin(update.effective_user.id): return
     if not context.args:
-        return await update.message.reply_text("Kullanım: /mac_iptal [MAC_ID]")
+        return await auto_reply(update, "Kullanım: /mac_iptal [MAC_ID]")
     mid = context.args[0].upper()
     c = cfg()
     if mid not in c.get("futbol_maclar", {}):
-        return await update.message.reply_text(f"❌ [{mid}] bulunamadı.")
+        return await auto_reply(update, f"❌ [{mid}] bulunamadı.")
     c["futbol_maclar"][mid]["durum"] = "iptal"
     save(c)
     await update.message.reply_text(f"❌ [{mid}] iptal edildi. Tahminler iade edilmez.")
@@ -3304,9 +3337,9 @@ def _tahmin_dogru_mu(t_raw, skor, m):
 
 async def anket_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id): return
-    if not context.args: return await update.message.reply_text("Kullanım: /anket Soru?|Seçenek1|Seçenek2|Seçenek3")
+    if not context.args: return await auto_reply(update, "Kullanım: /anket Soru?|Seçenek1|Seçenek2|Seçenek3")
     parcalar=" ".join(context.args).split("|")
-    if len(parcalar)<3: return await update.message.reply_text("❌ En az 2 seçenek lazım!")
+    if len(parcalar)<3: return await auto_reply(update, "❌ En az 2 seçenek lazım!")
     soru=parcalar[0].strip(); secenekler=[p.strip() for p in parcalar[1:]]
     try:
         await context.bot.send_poll(update.effective_chat.id, soru, secenekler, is_anonymous=False)
@@ -3316,7 +3349,7 @@ async def anket_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def ban_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id): return
-    if not update.message.reply_to_message: return await update.message.reply_text("Banlamak için mesajı yanıtla!")
+    if not update.message.reply_to_message: return await auto_reply(update, "Banlamak için mesajı yanıtla!")
     hedef=update.message.reply_to_message.from_user
     try:
         await context.bot.ban_chat_member(update.effective_chat.id, hedef.id)
@@ -3328,7 +3361,7 @@ async def btc_cmd(update, context): context.args=["BTC"]; await kripto_cmd(updat
 async def butonsil_cmd(update, context):
     if not is_admin(update.effective_user.id): return
     c=cfg()
-    if not context.args or not context.args[0].isdigit(): return await update.message.reply_text("Kullanım: /butonsil 1")
+    if not context.args or not context.args[0].isdigit(): return await auto_reply(update, "Kullanım: /butonsil 1")
     idx=int(context.args[0])-1; b=c.get("join_butonlar",[])
     if 0<=idx<len(b): b.pop(idx); c["join_butonlar"]=b; save(c); await update.message.reply_text("🗑 Silindi!")
 
@@ -3356,9 +3389,9 @@ YETKILER = {
 
 async def cevap_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id): return
-    if len(context.args)<2: return await update.message.reply_text("Kullanım: /cevap [ticket_id] [mesaj]")
+    if len(context.args)<2: return await auto_reply(update, "Kullanım: /cevap [ticket_id] [mesaj]")
     c=cfg(); tid=context.args[0]; mesaj=" ".join(context.args[1:])
-    if tid not in c.get("tickets",{}): return await update.message.reply_text("❌ Ticket bulunamadı!")
+    if tid not in c.get("tickets",{}): return await auto_reply(update, "❌ Ticket bulunamadı!")
     ticket=c["tickets"][tid]; ticket["durum"]="kapali"; save(c)
     try:
         await context.bot.send_message(ticket["user_id"], f"🎫 <b>Ticket #{tid} Yanıtlandı</b>\n\n{mesaj}", parse_mode="HTML")
@@ -3368,7 +3401,7 @@ async def cevap_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ÜCRETLI ÜYELİK
 
 async def destek_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args: return await update.message.reply_text("Kullanım: /destek [mesajın]")
+    if not context.args: return await auto_reply(update, "Kullanım: /destek [mesajın]")
     c=cfg(); uid=update.effective_user.id
     tid=str(uid)[-6:]
     c.setdefault("tickets",{})[tid]={"durum":"acik","isim":update.effective_user.first_name,"user_id":uid,"mesaj":" ".join(context.args)}
@@ -3381,7 +3414,7 @@ async def destek_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def emojisil_cmd(update, context):
     if not is_admin(update.effective_user.id): return
     c=cfg()
-    if not context.args: return await update.message.reply_text("Kullanım: /emojisil kelime")
+    if not context.args: return await auto_reply(update, "Kullanım: /emojisil kelime")
     k=context.args[0].lower()
     if k in c["emoji_kurallar"]: del c["emoji_kurallar"][k]; save(c); await update.message.reply_text(f"🗑 {k} silindi!")
     else: await update.message.reply_text("❌ Bulunamadı!")
@@ -3400,11 +3433,11 @@ async def futbol_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         bahis = int(context.args[0]); yon = context.args[1].lower()
         if yon not in ["sol","orta","sag","sağ"]:
-            return await update.message.reply_text("❌ sol, orta veya sag yaz!")
+            return await auto_reply(update, "❌ sol, orta veya sag yaz!")
         b = get_bakiye(c, uid)
-        if b["puan"] < bahis: return await update.message.reply_text("❌ Yetersiz bakiye!")
+        if b["puan"] < bahis: return await auto_reply(update, "❌ Yetersiz bakiye!")
         if bahis < c["casino_min_bahis"] or bahis > c["casino_max_bahis"]:
-            return await update.message.reply_text(f"❌ {c['casino_min_bahis']}-{c['casino_max_bahis']} arası!")
+            return await auto_reply(update, f"❌ {c['casino_min_bahis']}-{c['casino_max_bahis']} arası!")
 
         kaleci_yon = random.choice(["sol", "orta", "sag"])
         yon_emoji = {"sol":"⬅️","orta":"⬆️","sag":"➡️"}
@@ -3478,13 +3511,26 @@ async def join_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def kick_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id): return
-    if not update.message.reply_to_message: return await update.message.reply_text("Kicklemek için mesajı yanıtla!")
+    if not update.message.reply_to_message: return await auto_reply(update, "Kicklemek için mesajı yanıtla!")
     hedef=update.message.reply_to_message.from_user
     try:
         await context.bot.ban_chat_member(update.effective_chat.id, hedef.id)
         await context.bot.unban_chat_member(update.effective_chat.id, hedef.id)
         await update.message.reply_text(f"👟 <b>{hedef.first_name}</b> kicklendi!", parse_mode="HTML")
     except Exception as e: await update.message.reply_text(f"❌ {e}")
+
+def _kripto_id(sembol):
+    MAP = {
+        "BTC":"bitcoin","ETH":"ethereum","TON":"the-open-network",
+        "BNB":"binancecoin","SOL":"solana","USDT":"tether",
+        "USDC":"usd-coin","XRP":"ripple","ADA":"cardano",
+        "AVAX":"avalanche-2","DOT":"polkadot","MATIC":"matic-network",
+        "DOGE":"dogecoin","SHIB":"shiba-inu","TRX":"tron",
+        "LTC":"litecoin","LINK":"chainlink","UNI":"uniswap",
+        "ATOM":"cosmos","FIL":"filecoin",
+    }
+    return MAP.get(sembol.upper(), sembol.lower())
+
 
 async def kripto_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     c=cfg()
@@ -3508,7 +3554,7 @@ async def kurallar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id): return
-    if not update.message.reply_to_message: return await update.message.reply_text("Mutlamak için mesajı yanıtla!")
+    if not update.message.reply_to_message: return await auto_reply(update, "Mutlamak için mesajı yanıtla!")
     hedef=update.message.reply_to_message.from_user
     sure=int(context.args[0]) if context.args else 10
     try:
@@ -3520,11 +3566,11 @@ async def mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def onayla_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id): return
-    if len(context.args)<2: return await update.message.reply_text("Kullanım: /onayla [user_id] [1ay|3ay|yillik]")
+    if len(context.args)<2: return await auto_reply(update, "Kullanım: /onayla [user_id] [1ay|3ay|yillik]")
     c=cfg()
     try:
         uid_str,plan=context.args[0],context.args[1]
-        if plan not in c["uyelik_fiyatlar"]: return await update.message.reply_text("❌ Plan: 1ay, 3ay, yillik")
+        if plan not in c["uyelik_fiyatlar"]: return await auto_reply(update, "❌ Plan: 1ay, 3ay, yillik")
         gun=c["uyelik_fiyatlar"][plan]["gun"]
         bitis=(datetime.now()+timedelta(days=gun)).strftime("%Y-%m-%d")
         c["uyelikler"][uid_str]={"plan":plan,"bitis":bitis,"aktif":True,"isim":f"Kullanıcı {uid_str}"}
@@ -3537,7 +3583,7 @@ async def onayla_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def otosil_cmd(update, context):
     if not is_admin(update.effective_user.id): return
     c=cfg()
-    if not context.args or not context.args[0].isdigit(): return await update.message.reply_text("Kullanım: /otosil 2")
+    if not context.args or not context.args[0].isdigit(): return await auto_reply(update, "Kullanım: /otosil 2")
     idx=int(context.args[0])-1
     if 0<=idx<len(c["oto_mesajlar"]): c["oto_mesajlar"].pop(idx); save(c); await update.message.reply_text("🗑 Silindi!")
     else: await update.message.reply_text("❌ Geçersiz!")
@@ -3559,7 +3605,7 @@ async def unmute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def uyeol_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     c=cfg()
-    if not c["uyelik_aktif"]: return await update.message.reply_text("❌ Üyelik sistemi aktif değil.")
+    if not c["uyelik_aktif"]: return await auto_reply(update, "❌ Üyelik sistemi aktif değil.")
     txt=("💰 <b>Ücretli Üyelik</b>\n\n"
         +"\n".join([f"• {v['label']}: <b>{v['fiyat']} USDT</b>" for v in c['uyelik_fiyatlar'].values()])
         +f"\n\n💎 TON: <code>{c['uyelik_ton_adres']}</code>\n💵 USDT: <code>{c['uyelik_usdt_adres']}</code>\n\nÖdeme sonrası yöneticiye ulaşın.")
@@ -3569,7 +3615,7 @@ async def uyeol_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def warn_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id): return
-    if not update.message.reply_to_message: return await update.message.reply_text("Uyarmak için mesajı yanıtla!")
+    if not update.message.reply_to_message: return await auto_reply(update, "Uyarmak için mesajı yanıtla!")
     c=cfg()
     hedef=update.message.reply_to_message.from_user
     uid=str(hedef.id)
@@ -3587,14 +3633,14 @@ async def warn_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def yasakekle_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id): return
-    if not context.args: return await update.message.reply_text("Kullanım: /yasakekle kelime")
+    if not context.args: return await auto_reply(update, "Kullanım: /yasakekle kelime")
     c=cfg(); kelime=" ".join(context.args).lower()
     if kelime not in c["yasakli_kelimeler"]: c["yasakli_kelimeler"].append(kelime); save(c)
     await update.message.reply_text(f"✅ '{kelime}' yasaklı listeye eklendi!")
 
 async def yasaksil_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id): return
-    if not context.args: return await update.message.reply_text("Kullanım: /yasaksil kelime")
+    if not context.args: return await auto_reply(update, "Kullanım: /yasaksil kelime")
     c=cfg(); kelime=" ".join(context.args).lower()
     if kelime in c["yasakli_kelimeler"]: c["yasakli_kelimeler"].remove(kelime); save(c); await update.message.reply_text(f"✅ '{kelime}' kaldırıldı!")
     else: await update.message.reply_text("❌ Bulunamadı!")
@@ -3657,11 +3703,11 @@ async def quiz_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     c = cfg()
     if not c.get("quiz_aktif", True): return
     if not is_admin(update.effective_user.id):
-        return await update.message.reply_text("❌ Sadece adminler quiz başlatabilir!")
+        return await auto_reply(update, "❌ Sadece adminler quiz başlatabilir!")
     chat_id = str(update.effective_chat.id)
     aktif = c.get("quiz_aktif_oyun", {})
     if chat_id in aktif:
-        return await update.message.reply_text("⚠️ Zaten aktif bir quiz var! /quiz_bitir ile durdur.")
+        return await auto_reply(update, "⚠️ Zaten aktif bir quiz var! /quiz_bitir ile durdur.")
     sayi = int(context.args[0]) if context.args and context.args[0].isdigit() else 5
     sayi = max(1, min(20, sayi))
     sorular = c.get("quiz_sorular", []) or VARSAYILAN_SORULAR
@@ -3787,7 +3833,7 @@ async def quiz_bitir_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
     aktif = c.get("quiz_aktif_oyun", {})
     if chat_id not in aktif:
-        return await update.message.reply_text("Aktif quiz yok.")
+        return await auto_reply(update, "Aktif quiz yok.")
     aktif[chat_id]["aktif"] = False
     c["quiz_aktif_oyun"] = aktif
     save(c)
@@ -3802,7 +3848,7 @@ async def quiz_soru_ekle_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "Örnek: /quiz_ekle Türkiye'nin başkenti? | Ankara,ankara")
     metin = " ".join(context.args)
     if "|" not in metin:
-        return await update.message.reply_text("❌ | ile soru ve cevabı ayır!")
+        return await auto_reply(update, "❌ | ile soru ve cevabı ayır!")
     parca = metin.split("|", 1)
     soru_m = parca[0].strip()
     cevaplar = [c2.strip() for c2 in parca[1].split(",")]
@@ -3830,7 +3876,7 @@ async def duello_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     isim = update.effective_user.first_name
     hata, bahis = bahis_kontrol(c, uid, context.args[-1])
-    if hata: return await update.message.reply_text(hata)
+    if hata: return await auto_reply(update, hata)
     # Rakip mention'ı
     rakip_mention = context.args[0].replace("@","")
     duello_id = f"D{random.randint(10000,99999)}"
@@ -3951,7 +3997,7 @@ async def jackpot_cekilis_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE
     c = cfg()
     havuz = c.get("jackpot_havuz", 0)
     if havuz < 100:
-        return await update.message.reply_text(f"❌ Havuz çok az: {havuz} puan. Min 100 gerekli.")
+        return await auto_reply(update, f"❌ Havuz çok az: {havuz} puan. Min 100 gerekli.")
     chat_id = str(update.effective_chat.id)
     # Katılımcıları temizle ve başlat
     c.setdefault("jackpot_son", {})[chat_id] = {
@@ -4055,7 +4101,7 @@ async def kbj_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Hedef: 21'i geçmeden kasadan yüksek puan al!\n"
             "• Kart çek: Kart Al\n• Dur: Dur (kasa devam eder)", parse_mode="HTML")
     hata, bahis = bahis_kontrol(c, uid, context.args[0])
-    if hata: return await update.message.reply_text(hata)
+    if hata: return await auto_reply(update, hata)
     # Masa oluştur
     deste = _KBJ_KARTLAR.copy()
     random.shuffle(deste)
@@ -4480,7 +4526,7 @@ async def kelime_bitir_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
     kelime_oyunlari = c.get("kelime_oyunlari", {})
     if chat_id not in kelime_oyunlari:
-        return await update.message.reply_text("Aktif kelime oyunu yok.")
+        return await auto_reply(update, "Aktif kelime oyunu yok.")
     oyun = kelime_oyunlari[chat_id]
     skor = oyun.get("skor", {})
     isimler = oyun.get("isimler", {})
@@ -4488,7 +4534,7 @@ async def kelime_bitir_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     c["kelime_oyunlari"] = kelime_oyunlari
     save(c)
     if not skor:
-        return await update.message.reply_text("🔤 Kelime oyunu bitti! Kimse oynamadı.")
+        return await auto_reply(update, "🔤 Kelime oyunu bitti! Kimse oynamadı.")
     sirali = sorted(skor.items(), key=lambda x: x[1], reverse=True)
     madalya = ["🥇","🥈","🥉"]
     metin = "🔤 <b>Kelime Zinciri Bitti!</b>\n\n"
