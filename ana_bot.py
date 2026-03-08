@@ -334,6 +334,7 @@ def geri_kb(cb): return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Geri",
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
+    context.user_data.clear()  # Önceki bekle state'lerini temizle
     c = cfg()
     # Kullanıcıyı kaydet (DM listesi için)
     kaydet_kullanici(c, update.effective_user)
@@ -377,6 +378,72 @@ async def _gonder(bot, chat_id, metin, mt="yok", mid="", butonlar=None):
     else: await bot.send_message(chat_id=chat_id, text=metin, parse_mode="HTML", reply_markup=kb)
 
 # ── CALLBACK ────────────────────────────────────────────────────
+async def adminekle_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Süper admin: /adminekle (reply) veya /adminekle [USER_ID]"""
+    if not is_admin(update.effective_user.id):
+        return await auto_reply(update, "❌ Bu komut sadece adminler içindir.")
+    await _yetkili_ekle(update, context, hedef_sev=3)
+
+async def moderatorekle_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Süper admin: /moderatorekle (reply) veya /moderatorekle [USER_ID]"""
+    if not is_admin(update.effective_user.id):
+        return await auto_reply(update, "❌ Bu komut sadece adminler içindir.")
+    await _yetkili_ekle(update, context, hedef_sev=2)
+
+async def _yetkili_ekle(update: Update, context: ContextTypes.DEFAULT_TYPE, hedef_sev: int):
+    """Ortak yardımcı: reply ya da args ile admin/mod ekle"""
+    SEV_ISIM  = {3: "👑 Süper Admin", 2: "🛡 Moderatör", 1: "⭐ Yardımcı"}
+    c = cfg()
+
+    # Hedefi bul
+    hedef_uid  = None
+    hedef_isim = "?"
+
+    # 1. Reply ile
+    if update.message.reply_to_message:
+        u = update.message.reply_to_message.from_user
+        hedef_uid  = u.id
+        hedef_isim = u.first_name or str(u.id)
+
+    # 2. Args ile: /adminekle 123456789
+    elif context.args:
+        arg = context.args[0].replace("@", "")
+        try:
+            hedef_uid  = int(arg)
+            hedef_isim = str(hedef_uid)
+        except ValueError:
+            return await auto_reply(update,
+                f"❌ Geçersiz format!\n\n"
+                f"Kullanım:\n"
+                f"• Kişinin mesajına <b>reply</b> yap + komutu yaz\n"
+                f"• Ya da: <code>/{'adminekle' if hedef_sev==3 else 'moderatorekle'} 123456789</code>",
+                parse_mode="HTML")
+    else:
+        return await auto_reply(update,
+            f"ℹ️ <b>Kullanım:</b>\n\n"
+            f"1️⃣ Kişinin mesajına <b>reply</b> yaparak komutu yaz\n"
+            f"2️⃣ Ya da: <code>/{'adminekle' if hedef_sev==3 else 'moderatorekle'} USER_ID</code>\n\n"
+            f"📋 Telegram ID öğrenmek için: @userinfobot",
+            parse_mode="HTML")
+
+    # Zaten var mı?
+    zaten = hedef_uid in c.get("adminler", [])
+
+    # Ekle ve seviye ata
+    if not zaten:
+        c.setdefault("adminler", []).append(hedef_uid)
+    c.setdefault("adminler_seviye", {})[str(hedef_uid)] = hedef_sev
+    save(c)
+
+    durum = "güncellendi" if zaten else "eklendi"
+    await update.message.reply_text(
+        f"✅ <b>{hedef_isim}</b> {durum}!\n\n"
+        f"Rol: {SEV_ISIM[hedef_sev]}\n"
+        f"ID: <code>{hedef_uid}</code>\n\n"
+        f"👑 Admin yönetimi için: /start → ⚙️ Ayarlar → Admin Yönetimi",
+        parse_mode="HTML")
+
+
 async def cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -736,15 +803,144 @@ async def cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # AYARLAR
     elif d == "m_ayar":
-        admin_txt="\n".join([f"• <code>{a}</code>" for a in c["adminler"]])
-        await q.edit_message_text(f"⚙️ <b>Marka & Admin</b>\n\nBot: {c.get('marka_isim','SOGTİLLA')}\nAdminler:\n{admin_txt}", parse_mode="HTML",
+        bot_isim = c.get("marka_isim", "SOGTİLLA")
+        await q.edit_message_text(
+            f"⚙️ <b>Bot Ayarları</b>\n\n"
+            f"🤖 Bot Adı: <b>{bot_isim}</b>",
+            parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("✏️ Bot Adı", callback_data="marka_isim"), InlineKeyboardButton("➕ Admin Ekle", callback_data="admin_ekle")],
-                [InlineKeyboardButton("➖ Admin Sil", callback_data="admin_sil_menu")],
+                [InlineKeyboardButton("✏️ Bot Adı Değiştir", callback_data="marka_isim")],
+                [InlineKeyboardButton("👑 Admin Yönetimi", callback_data="admin_yonetim")],
                 [InlineKeyboardButton("🔙 Geri", callback_data="ana")],
             ]))
     elif d=="marka_isim": await q.edit_message_text("Yeni bot adı yaz:\n\nİptal: /iptal", reply_markup=geri_kb("m_ayar")); context.user_data["bekle"]="marka_isim"
-    elif d=="admin_ekle": await q.edit_message_text("Eklenecek admin ID'sini yaz:\n\nİptal: /iptal", reply_markup=geri_kb("m_ayar")); context.user_data["bekle"]="admin_ekle"
+    elif d=="admin_ekle": context.user_data["bekle"]="adm_ekle_id"; await q.edit_message_text("➕ Eklenecek kişinin Telegram ID'sini yaz:\n\n📋 ID bulmak için @userinfobot'a mesaj gönder\n\nİptal: /iptal", reply_markup=geri_kb("admin_yonetim"))
+    elif d == "admin_yonetim":
+        # Admin yönetim paneli — mevcut adminleri listele
+        SEV_EMOJI = {3: "👑", 2: "🛡", 1: "⭐"}
+        SEV_ISIM  = {3: "Süper Admin", 2: "Moderatör", 1: "Yardımcı"}
+        adminler  = c.get("adminler", [])
+        seviyeler = c.get("adminler_seviye", {})
+        satirlar  = []
+        for a in adminler:
+            sev  = seviyeler.get(str(a), 3)
+            satirlar.append([
+                InlineKeyboardButton(f"{SEV_EMOJI.get(sev,'👑')} {a}  [{SEV_ISIM.get(sev,'Admin')}]",
+                                     callback_data=f"adm_detay_{a}"),
+            ])
+        satirlar.append([InlineKeyboardButton("➕ Yeni Admin / Mod Ekle", callback_data="adm_ekle_baslat")])
+        satirlar.append([InlineKeyboardButton("🔙 Geri", callback_data="m_ayar")])
+        await q.edit_message_text(
+            f"👑 <b>Admin Yönetimi</b>\n\n"
+            f"Toplam {len(adminler)} admin kayıtlı.\n"
+            f"Birini seçerek düzenleyebilir veya silebilirsin.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(satirlar))
+
+    elif d == "adm_ekle_baslat":
+        # Metin gir — ID veya @username
+        context.user_data["bekle"] = "adm_ekle_id"
+        await q.edit_message_text(
+            "➕ <b>Yeni Üye Ekle</b>\n\n"
+            "Eklemek istediğin kişinin <b>Telegram ID</b>'sini yaz\n"
+            "(ya da sohbette mesajını <b>reply</b> yaparak /adminekle veya /moderatorekle kullan)\n\n"
+            "📋 ID'yi bulmak için: @userinfobot'a mesaj gönder\n\n"
+            "<i>İptal: /iptal</i>",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Vazgeç", callback_data="admin_yonetim")
+            ]]))
+
+    elif d.startswith("adm_detay_"):
+        # Seçilen adminin detay/düzenleme ekranı
+        hedef_uid = d.replace("adm_detay_", "")
+        SEV_EMOJI = {3: "👑", 2: "🛡", 1: "⭐"}
+        SEV_ISIM  = {3: "Süper Admin", 2: "Moderatör", 1: "Yardımcı"}
+        sev = c.get("adminler_seviye", {}).get(str(hedef_uid), 3)
+        await q.edit_message_text(
+            f"👤 <b>Admin: {hedef_uid}</b>\n"
+            f"Rol: {SEV_EMOJI.get(sev,'👑')} <b>{SEV_ISIM.get(sev,'Admin')}</b>\n\n"
+            f"Yetki değiştir veya sil:",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("👑 Süper Admin", callback_data=f"adm_sev_{hedef_uid}_3"),
+                 InlineKeyboardButton("🛡 Moderatör",   callback_data=f"adm_sev_{hedef_uid}_2")],
+                [InlineKeyboardButton("⭐ Yardımcı",    callback_data=f"adm_sev_{hedef_uid}_1"),
+                 InlineKeyboardButton("❌ Adminlikten Çıkar", callback_data=f"adm_sil_{hedef_uid}")],
+                [InlineKeyboardButton("🔙 Geri", callback_data="admin_yonetim")],
+            ]))
+
+    elif d.startswith("adm_sev_"):
+        # adm_sev_UID_SEVIYE
+        parcalar = d.split("_")
+        hedef_uid_str = parcalar[2]
+        yeni_sev = int(parcalar[3])
+        SEV_ISIM = {3: "👑 Süper Admin", 2: "🛡 Moderatör", 1: "⭐ Yardımcı"}
+        try:
+            hedef_int = int(hedef_uid_str)
+        except:
+            return await q.answer("❌ Geçersiz ID!", show_alert=True)
+        if hedef_int not in c.get("adminler", []):
+            c.setdefault("adminler", []).append(hedef_int)
+        c.setdefault("adminler_seviye", {})[hedef_uid_str] = yeni_sev
+        save(c)
+        await q.answer(f"✅ {SEV_ISIM[yeni_sev]} olarak ayarlandı!", show_alert=True)
+        # Admin listesini tekrar göster
+        SEV_EMOJI2 = {3: "👑", 2: "🛡", 1: "⭐"}
+        SEV_ISIM2  = {3: "Süper Admin", 2: "Moderatör", 1: "Yardımcı"}
+        c2 = cfg()
+        adminler2  = c2.get("adminler", [])
+        seviyeler2 = c2.get("adminler_seviye", {})
+        satirlar2  = []
+        for a in adminler2:
+            s = seviyeler2.get(str(a), 3)
+            satirlar2.append([InlineKeyboardButton(
+                f"{SEV_EMOJI2.get(s,'👑')} {a}  [{SEV_ISIM2.get(s,'Admin')}]",
+                callback_data=f"adm_detay_{a}")])
+        satirlar2.append([InlineKeyboardButton("➕ Yeni Admin / Mod Ekle", callback_data="adm_ekle_baslat")])
+        satirlar2.append([InlineKeyboardButton("🔙 Geri", callback_data="m_ayar")])
+        await q.edit_message_text(
+            f"✅ Rol güncellendi!\n\n"
+            f"👑 <b>Admin Yönetimi</b>\n"
+            f"Toplam {len(adminler2)} admin kayıtlı.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(satirlar2))
+
+    elif d.startswith("adm_sil_"):
+        hedef_uid_str = d.replace("adm_sil_", "")
+        try:
+            hedef_int = int(hedef_uid_str)
+        except:
+            return await q.answer("❌ Geçersiz ID!", show_alert=True)
+        if hedef_int == uid:
+            return await q.answer("❌ Kendinizi silemezsiniz!", show_alert=True)
+        if len(c.get("adminler", [])) <= 1:
+            return await q.answer("❌ Son admin silinemez!", show_alert=True)
+        if hedef_int in c.get("adminler", []):
+            c["adminler"].remove(hedef_int)
+            c.get("adminler_seviye", {}).pop(hedef_uid_str, None)
+            save(c)
+            await q.answer("✅ Admin silindi!", show_alert=True)
+        # Admin listesini tekrar göster
+        c3 = cfg()
+        adminler3  = c3.get("adminler", [])
+        seviyeler3 = c3.get("adminler_seviye", {})
+        SEV_EMOJI3 = {3: "👑", 2: "🛡", 1: "⭐"}
+        SEV_ISIM3  = {3: "Süper Admin", 2: "Moderatör", 1: "Yardımcı"}
+        satirlar3  = []
+        for a in adminler3:
+            s = seviyeler3.get(str(a), 3)
+            satirlar3.append([InlineKeyboardButton(
+                f"{SEV_EMOJI3.get(s,'👑')} {a}  [{SEV_ISIM3.get(s,'Admin')}]",
+                callback_data=f"adm_detay_{a}")])
+        satirlar3.append([InlineKeyboardButton("➕ Yeni Admin / Mod Ekle", callback_data="adm_ekle_baslat")])
+        satirlar3.append([InlineKeyboardButton("🔙 Geri", callback_data="m_ayar")])
+        await q.edit_message_text(
+            f"✅ Admin silindi.\n\n👑 <b>Admin Yönetimi</b>\nToplam {len(adminler3)} admin.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(satirlar3))
+
+
     elif d=="admin_sil_menu":
         rows=[[InlineKeyboardButton(f"❌ {a}",callback_data=f"admin_sil_{a}")] for a in c["adminler"]]
         rows.append([InlineKeyboardButton("🔙",callback_data="m_ayar")])
@@ -2113,16 +2309,19 @@ async def cb_v2(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await admin_yetki_menu(q)
 
     elif d == "yadmin_ekle":
+        # Yeni sisteme yönlendir
         if admin_seviye(uid) < 3:
-            return await q.answer("❌ Yetki yok!", show_alert=True)
+            return await q.answer("❌ Sadece Süper Admin erişebilir!", show_alert=True)
+        context.user_data["bekle"] = "adm_ekle_id"
         await q.edit_message_text(
-            "➕ <b>Yeni Admin Ekle</b>\n\n"
-            "Şu formatı yaz:\n<code>USER_ID SEVİYE</code>\n\n"
-            "👑 3 = Süper Admin\n🛡 2 = Moderatör\n⭐ 1 = Yardımcı\n\n"
-            "Örnek: <code>123456789 2</code>\n\nİptal: /iptal",
+            "➕ <b>Yeni Admin/Mod Ekle</b>\n\n"
+            "Eklenecek kişinin <b>Telegram ID</b>'sini yaz:\n\n"
+            "📋 ID bulmak için @userinfobot'a mesaj gönder\n\n"
+            "<i>İptal: /iptal</i>",
             parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Geri", callback_data="m_admin_yetki")]]))
-        context.user_data["bekle"] = "yadmin_ekle"
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Vazgeç", callback_data="admin_yonetim")
+            ]]))
 
     elif d == "yadmin_seviye_sec":
         if admin_seviye(uid) < 3:
@@ -2373,18 +2572,46 @@ async def mesaj_handler_v2(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"✅ Kanal eklendi: {metin_in}")
 
         elif bekle == "admin_ekle":
+            # Eski sistem — uyumluluk için koru
             try:
                 new_uid = int(metin_in.replace("@",""))
-                if new_uid not in c.get("adminler", []):
-                    c.setdefault("adminler", []).append(new_uid)
-                save(c); context.user_data["bekle"] = None
+                context.user_data["bekle"] = None
                 await update.message.reply_text(
-                    f"✅ Admin eklendi: <code>{new_uid}</code>\n\nPanele dönmek için: /start",
+                    f"🔢 ID alındı: <code>{new_uid}</code>\n\nŞimdi bu kişinin rolünü seç:",
                     parse_mode="HTML",
-                    reply_markup=InlineKeyboardMarkup([[
-                        InlineKeyboardButton("⚙️ Ayarlara Dön", callback_data="m_ayar")
-                    ]])
-                )
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("👑 Süper Admin", callback_data=f"adm_sev_{new_uid}_3")],
+                        [InlineKeyboardButton("🛡 Moderatör",   callback_data=f"adm_sev_{new_uid}_2")],
+                        [InlineKeyboardButton("⭐ Yardımcı",    callback_data=f"adm_sev_{new_uid}_1")],
+                        [InlineKeyboardButton("❌ İptal",        callback_data="admin_yonetim")],
+                    ]))
+            except ValueError:
+                await auto_reply(update, "❌ Geçersiz ID! Sadece sayısal Telegram ID gir.\nÖrn: <code>123456789</code>", parse_mode="HTML")
+
+        elif bekle == "adm_ekle_id":
+            # Yeni admin ekleme: ID alındı → seviye seç
+            try:
+                if metin_in.startswith("@"):
+                    await auto_reply(update, "❌ @kullanıcıadı değil, sayısal ID gir.\n📋 ID için @userinfobot'a mesaj gönder.", parse_mode="HTML")
+                else:
+                    new_uid = int(metin_in.strip())
+                    context.user_data["bekle"] = None
+                    # Zaten admin mi?
+                    zaten = new_uid in c.get("adminler", [])
+                    mevcut_sev = c.get("adminler_seviye", {}).get(str(new_uid), 3) if zaten else None
+                    durum = f"\n⚠️ Bu kişi zaten {['','⭐ Yardımcı','🛡 Moderatör','👑 Süper Admin'][mevcut_sev]} olarak kayıtlı." if zaten else ""
+                    await update.message.reply_text(
+                        f"🔢 ID: <code>{new_uid}</code>{durum}\n\n"
+                        f"Bu kişinin rolünü seç:",
+                        parse_mode="HTML",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("👑 Süper Admin", callback_data=f"adm_sev_{new_uid}_3")],
+                            [InlineKeyboardButton("🛡 Moderatör",   callback_data=f"adm_sev_{new_uid}_2")],
+                            [InlineKeyboardButton("⭐ Yardımcı",    callback_data=f"adm_sev_{new_uid}_1")],
+                            [InlineKeyboardButton("❌ İptal",        callback_data="admin_yonetim")],
+                        ]))
+            except ValueError:
+                await auto_reply(update, "❌ Geçersiz! Sayısal Telegram ID gir.\n📋 ID için @userinfobot'a yaz.", parse_mode="HTML")
             except:
                 await auto_reply(update, "❌ Geçerli bir kullanıcı ID'si gir")
 
@@ -3720,7 +3947,9 @@ GOREVLER = {
     "referans_ver": {"puan": 150, "aciklama": "👥 Arkadaş davet et",      "tekrar": True},
 }
 
-async def iptal(update, context, *args): context.user_data["bekle"]=None; await update.message.reply_text("❌ İptal.")
+async def iptal(update, context, *args):
+    context.user_data.clear()
+    await update.message.reply_text("❌ İşlem iptal edildi.")
 
 async def join_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     c=cfg()
@@ -5829,6 +6058,10 @@ def main():
     app.add_handler(CommandHandler("ver",        ver_cmd))
     app.add_handler(CommandHandler("al",         al_cmd))
     app.add_handler(CommandHandler("sifirla",    sifirla_cmd))
+
+    # Admin yönetim komutları
+    app.add_handler(CommandHandler("adminekle",      adminekle_cmd))
+    app.add_handler(CommandHandler("moderatorekle",  moderatorekle_cmd))
 
     # Moderasyon
     app.add_handler(CommandHandler("warn",     warn_cmd))
