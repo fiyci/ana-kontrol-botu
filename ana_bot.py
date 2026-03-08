@@ -13,6 +13,7 @@ from telegram.ext import (
 )
 
 BOT_TOKEN = "8743351745:AAGgX51IjWqSxNC6HY8yLINyabZ_4Dfq_Ow"
+FUTBOL_API_KEY = "4a30a8265295ef0a6ec013630adc4def"  # api-football.com
 CONFIG    = "config.json"
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -87,7 +88,7 @@ DEFAULT = {
     "puan_carpan": 1.0,
     # ── FUTBOL TAHMİN ──
     "futbol_aktif": True,
-    "futbol_api_key": "",          # api-football.com API key (ücretsiz 100/gün)
+    "futbol_api_key": "4a30a8265295ef0a6ec013630adc4def",  # api-football.com
     "futbol_maclar": {},           # {mac_id: {ev, deplasman, tarih, lig, skor, durum}}
     "futbol_tahminler": {},        # {mac_id: {uid: "1"|"X"|"2"}}
     "futbol_kazanc": {             # doğru tahmin ödülleri
@@ -119,9 +120,14 @@ def cfg():
                 data = json.load(f)
             for k, v in DEFAULT.items():
                 if k not in data: data[k] = v
+            # API key her zaman güncel kalsın
+            if not data.get("futbol_api_key"):
+                data["futbol_api_key"] = FUTBOL_API_KEY
             return data
         except: pass
-    save(DEFAULT.copy()); return DEFAULT.copy()
+    d = DEFAULT.copy()
+    d["futbol_api_key"] = FUTBOL_API_KEY
+    save(d); return d
 
 def save(c):
     with open(CONFIG, "w", encoding="utf-8") as f:
