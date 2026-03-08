@@ -3385,8 +3385,8 @@ async def maclar_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(metin, parse_mode="HTML")
 
 
-async def tahmin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """⚽ /tahmin [MAC_ID] [1|X|2] veya /tahmin [MAC_ID] [ev_gol]-[dep_gol]"""
+async def futbol_tahmin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """⚽ /ftahmin [MAC_ID] [1|X|2] veya /ftahmin [MAC_ID] [ev_gol]-[dep_gol]"""
     c = cfg()
     if not c.get("futbol_aktif", True): return
     if not c.get("bakiye_aktif"): return
@@ -3909,7 +3909,8 @@ def main():
     app.add_handler(CommandHandler("etkinlik",    etkinlik_cmd))
     # Futbol Tahmin
     app.add_handler(CommandHandler("maclar",      maclar_cmd))
-    app.add_handler(CommandHandler("tahmin",      tahmin_cmd))
+    app.add_handler(CommandHandler("tahmin",      tahmin_cmd))  # casino sayı tahmin
+    app.add_handler(CommandHandler("ftahmin",     futbol_tahmin_cmd))  # futbol maç tahmini
     app.add_handler(CommandHandler("tahminlerim", tahminlerim_cmd))
     app.add_handler(CommandHandler("tahmin_top",  tahmin_top_cmd))
     app.add_handler(CommandHandler("mac_ekle",    mac_ekle_isle))
