@@ -6743,7 +6743,7 @@ KOMUTLAR_KATEGORILER = {
         ("/sponsorlar", "Sponsor siteler"),
         ("/rehber", "Rehber & yardım"),
         ("/bildirim", "DM bildirimlerini aç/kapat"),
-        ("/aktivite", "7 günlük aktivite haritası 📊")
+        ("/aktivite", "7 günlük aktivite haritası 📊"),
         ("/kurallar", "Grup kuralları"),
         ("/ping", "Bot hız testi"),
         ("/istat", "Bot istatistikleri"),
